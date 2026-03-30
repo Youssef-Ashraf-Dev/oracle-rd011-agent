@@ -1,0 +1,96 @@
+name: rd011-env
+
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+
+  # CPU-only torch from pytorch channel
+  - pytorch::pytorch=2.5.*
+  - pytorch::cpuonly
+
+  # Pin compiled libs to tested major/minor ranges for stability
+  - numpy=2.3.*
+  - pandas=2.3.*
+  - pyarrow=23.*
+  - lxml=6.0.*
+  - pillow=12.1.*
+  - openpyxl=3.1.*
+
+  - pydantic=2.12.*
+  - python-dotenv=1.2.*
+  - pyyaml=6.0.*
+
+  # Graphviz diagram rendering (dot binary and layout engines)
+  - graphviz
+
+  - pip
+  - pip:
+    # LangChain / LangGraph
+    - langchain==1.2.10
+    - langchain-core>=1.2.18
+    - langchain-google-genai==4.2.0
+    - langchain-groq==1.1.2
+    - langchain-openai==1.1.11
+    - langchain-mistralai==1.1.1
+    - langchain-chroma>=0.1.0
+    - langchain-community>=0.2.0
+    - langgraph==1.0.8
+    - langgraph-checkpoint==4.0.0
+    - langgraph-checkpoint-sqlite=3.0.3
+    - langgraph-prebuilt==1.0.7
+    - langgraph-sdk==0.3.6
+    - langsmith==0.7.3
+
+    # LLM providers
+    - google-genai==1.63.0
+    - google-generativeai==0.8.6
+    - openai>=2.26.0
+    - mistralai==1.4.0
+    - groq==0.37.1
+
+    # Vector DB and embeddings
+    - chromadb==0.6.3
+    - sentence-transformers==3.4.1
+
+    # Document parsing / generation
+    - unstructured[docx,xlsx]==0.17.2
+    - python-docx==1.2.0
+    - pypdf==6.7.1
+    - tabulate==0.9.0
+    - filetype==1.2.0
+    - docxtpl==0.20.2
+    - Jinja2==3.1.6
+
+    # Evaluation
+    - ragas==0.2.14
+
+    # Diagram rendering — Graphviz swimlane diagrams
+    - graphviz>=0.20
+
+    # Caching and networking
+    - diskcache==5.6.3
+    - requests-cache==1.2.1
+    - requests-toolbelt==1.0.0
+    - httpx==0.28.1
+    - requests==2.32.3
+    - tenacity==9.1.4
+
+    # UI
+    - streamlit==1.54.0
+    - watchdog==6.0.0
+    - pydeck==0.9.1
+    - altair==6.0.0
+    - narwhals==2.16.0
+
+    # Serialization
+    - orjson==3.11.7
+
+    # Runtime / tooling
+    - click==8.3.1
+    - tqdm==4.67.3
+    - pytest==8.4.*
+    - GitPython==3.1.46

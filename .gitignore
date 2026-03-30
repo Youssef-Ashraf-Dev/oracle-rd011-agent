@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# Checkpoints (SQLite checkpoint database — contains run state)
+checkpoints/
+
+# Generated outputs (Word documents and diagrams)
+outputs/
+
+
+# RAG knowledge base (raw examples and vector store data)
+rag/data/
+knowledge_base/raw_examples/
+knowledge_base/chroma_db/
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+rd011_agent.log
+
+# Graphviz
+*.gv
+
+# Jupyter
+.ipynb_checkpoints/
+
+
+# md arch files
+*.md
+# exclude readme.md
+!README.md

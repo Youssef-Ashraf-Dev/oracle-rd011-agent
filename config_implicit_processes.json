@@ -1,0 +1,416 @@
+{
+  "implicit_processes": [
+    {
+      "process_id": "AP.01",
+      "process_name": "Maintain Supplier Data",
+      "module": "AP",
+      "description": "Creation, update, and deactivation of supplier records including banking details, payment terms, and tax classifications in Oracle Supplier Master.",
+      "required_always": true,
+      "business_actors": [
+        "Supplier User",
+        "Supplier Administrator",
+        "AP Accountant",
+        "Finance Department"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.02",
+      "process_name": "Create PO Invoice",
+      "module": "AP",
+      "description": "Entry and validation of invoices matched against approved purchase orders, including 2-way, 3-way, or 4-way matching and hold resolution.",
+      "required_always": true,
+      "business_actors": [
+        "AP Accountant",
+        "Finance Manager",
+        "Procurement"
+      ],
+      "typical_step_count": 7,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.03",
+      "process_name": "Create Direct Invoice",
+      "module": "AP",
+      "description": "Entry and approval of non-PO invoices for direct expenses, services, or recurring obligations that bypass the procurement process.",
+      "required_always": true,
+      "business_actors": [
+        "AP Accountant",
+        "Finance Manager",
+        "Budget Controller"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.04",
+      "process_name": "Create Debit/ Credit Memo",
+      "module": "AP",
+      "description": "Creation of debit memos for supplier overcharges and credit memos for returned goods, price adjustments, or agreed disputes.",
+      "required_always": true,
+      "business_actors": [
+        "AP Accountant",
+        "Finance Manager"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.05",
+      "process_name": "Create Prepayment Invoice",
+      "module": "AP",
+      "description": "Recording of advance payments to suppliers prior to goods or service delivery, with subsequent application against standard invoices on receipt.",
+      "required_always": true,
+      "business_actors": [
+        "AP Accountant",
+        "Treasury Accountant",
+        "Finance Manager"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.07",
+      "process_name": "Invoice Cancellation",
+      "module": "AP",
+      "description": "Cancellation of incorrectly entered or rejected invoices, including reversal of any associated accounting entries and documentation of the cancellation reason.",
+      "required_always": true,
+      "business_actors": [
+        "AP Accountant",
+        "Finance Manager"
+      ],
+      "typical_step_count": 4,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.08",
+      "process_name": "Payment Processing",
+      "module": "AP",
+      "description": "Execution of payment runs including payment batch creation, approval, selection of invoice batches, bank file generation, and confirmation posting.",
+      "required_always": true,
+      "business_actors": [
+        "AP Accountant",
+        "Treasury Accountant",
+        "Finance Manager"
+      ],
+      "typical_step_count": 8,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.09",
+      "process_name": "Payment Cancellation",
+      "module": "AP",
+      "description": "Cancellation of processed payments due to errors, bank rejections, or supplier disputes, restoring invoices to unpaid status for reprocessing.",
+      "required_always": true,
+      "business_actors": [
+        "AP Accountant",
+        "Treasury Accountant"
+      ],
+      "typical_step_count": 4,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AP.13",
+      "process_name": "Month End Closing",
+      "module": "AP",
+      "description": "Period-end accruals for uninvoiced receipts, reconciliation of AP subledger to general ledger, and closure of the AP accounting period.",
+      "required_always": true,
+      "business_actors": [
+        "Finance Manager",
+        "Chief Accountant"
+      ],
+      "typical_step_count": 7,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AR.01",
+      "process_name": "Maintain Customers Data",
+      "module": "AR",
+      "description": "Creation, update, and management of customer accounts including credit limits, payment terms, billing preferences, and contact information.",
+      "required_always": true,
+      "business_actors": [
+        "AR Accountant",
+        "Finance Manager"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AR.03",
+      "process_name": "Transaction Entry",
+      "module": "AR",
+      "description": "Manual creation of AR transactions including standard invoices, debit memos, and charges raised directly against customer accounts.",
+      "required_always": true,
+      "business_actors": [
+        "AR Accountant"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AR.04",
+      "process_name": "Receipt Entry",
+      "module": "AR",
+      "description": "Recording and application of customer cash receipts against open invoices, including manual and automatic matching of payments.",
+      "required_always": true,
+      "business_actors": [
+        "AR Accountant",
+        "Treasury Manager"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AR.06",
+      "process_name": "Credit Memo",
+      "module": "AR",
+      "description": "Issuance of credit memos to customers for returns, billing errors, or agreed adjustments, with application against open or future invoices.",
+      "required_always": true,
+      "business_actors": [
+        "AR Accountant",
+        "Revenue Accountant",
+        "Finance Manager"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AR.09",
+      "process_name": "Receipt Reversal",
+      "module": "AR",
+      "description": "Reversal of incorrectly applied receipts or returned cheques, restoring the original invoice to open status for re-collection.",
+      "required_always": true,
+      "business_actors": [
+        "AR Accountant",
+        "Finance Manager"
+      ],
+      "typical_step_count": 4,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "AR.10",
+      "process_name": "Month End Closing",
+      "module": "AR",
+      "description": "Reconciliation of AR subledger to general ledger, aging analysis review, accrual for unbilled revenue, and closure of the AR accounting period.",
+      "required_always": true,
+      "business_actors": [
+        "Finance Manager",
+        "Chief Accountant"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "CM.01",
+      "process_name": "Bank Statement Reconciliation",
+      "module": "CM",
+      "description": "Import and automated or manual matching of bank statement lines against Oracle cash transactions to clear outstanding items and flag unreconciled entries.",
+      "required_always": true,
+      "business_actors": [
+        "Treasury Accountant",
+        "GL Accountant"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "CM.02",
+      "process_name": "Bank Transfer",
+      "module": "CM",
+      "description": "Initiation and recording of fund transfers between internal bank accounts, including approval, settlement confirmation, and accounting entry creation.",
+      "required_always": true,
+      "business_actors": [
+        "Treasury Accountant",
+        "Treasury Manager"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "CM.03",
+      "process_name": "External Transaction",
+      "module": "CM",
+      "description": "Manual entry of bank charges, interest payments, and other external bank transactions not originating from AP or AR, directly into the cash management ledger.",
+      "required_always": true,
+      "business_actors": [
+        "Treasury Accountant",
+        "Treasury Manager"
+      ],
+      "typical_step_count": 4,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.01",
+      "process_name": "Asset Addition",
+      "module": "FA",
+      "description": "Creation of new asset records from purchase orders, payables invoices, or manual entry, including assignment of asset category, location, and depreciation method.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "FA Manager"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.02",
+      "process_name": "Asset Capitalization",
+      "module": "FA",
+      "description": "Transfer of costs accumulated in Construction-in-Progress (CIP) to depreciable asset records upon project completion and readiness for use.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "Finance Manager",
+        "FA Manager"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.03",
+      "process_name": "Asset Adjustment",
+      "module": "FA",
+      "description": "Modification of existing asset attributes including cost, useful life, depreciation method, or category to reflect revaluation or correction.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "FA Manager"
+      ],
+      "typical_step_count": 4,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.04",
+      "process_name": "Asset Transfer",
+      "module": "FA",
+      "description": "Reassignment of assets between cost centers, locations, or responsible departments, updating ownership records and depreciation allocation accordingly.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "FA Manager"
+      ],
+      "typical_step_count": 4,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.05",
+      "process_name": "Asset Retirement",
+      "module": "FA",
+      "description": "Full or partial retirement of assets through sale, disposal, or write-off, including gain/loss calculation and removal from the asset register.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "FA Manager",
+        "Finance Manager"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.06",
+      "process_name": "Physical Count",
+      "module": "FA",
+      "description": "Periodic physical verification of assets against the Oracle asset register, reconciliation of discrepancies, and update of location or status records.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "FA Manager",
+        "Inventory Department"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.08",
+      "process_name": "Asset Impairment",
+      "module": "FA",
+      "description": "Recognition and recording of asset impairment losses where the carrying amount exceeds recoverable value, in line with applicable accounting standards.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "Finance Manager",
+        "Chief Accountant"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "FA.10",
+      "process_name": "Month End Closing",
+      "module": "FA",
+      "description": "Execution of the depreciation run, reconciliation of the asset register to the general ledger, and closure of the FA accounting period.",
+      "required_always": true,
+      "business_actors": [
+        "FA Accountant",
+        "Chief Accountant"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "GL.02",
+      "process_name": "Manual Journal Entry",
+      "module": "GL",
+      "description": "Creation, review, and approval of manual journal entries for accruals, corrections, allocations, and other non-automated accounting transactions.",
+      "required_always": true,
+      "business_actors": [
+        "GL Accountant",
+        "Chief Accountant"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "GL.03",
+      "process_name": "Journal Revision and Posting",
+      "module": "GL",
+      "description": "Review, correction, and approval of journal batches prior to final posting to the general ledger, including reversal of incorrectly posted entries.",
+      "required_always": true,
+      "business_actors": [
+        "GL Accountant",
+        "Chief Accountant"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "GL.04",
+      "process_name": "Budgeting",
+      "module": "GL",
+      "description": "Entry, upload, and maintenance of budget amounts by cost centre and account, with variance monitoring against actuals throughout the fiscal year.",
+      "required_always": true,
+      "business_actors": [
+        "Budget Controller",
+        "Finance Manager"
+      ],
+      "typical_step_count": 6,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "GL.05",
+      "process_name": "GL-Foreign Currency Revaluation",
+      "module": "GL",
+      "description": "Period-end revaluation of foreign currency balances using current exchange rates, generating unrealised gain/loss entries to reflect accurate reporting currency values.",
+      "required_always": true,
+      "business_actors": [
+        "GL Accountant",
+        "Treasury Accountant"
+      ],
+      "typical_step_count": 5,
+      "default_confidence": "high"
+    },
+    {
+      "process_id": "GL.06",
+      "process_name": "Period Closing",
+      "module": "GL",
+      "description": "Execution of period-end procedures including subledger reconciliation, translation, consolidation, and formal closure of the accounting period to prevent further postings.",
+      "required_always": true,
+      "business_actors": [
+        "Chief Accountant"
+      ],
+      "typical_step_count": 8,
+      "default_confidence": "high"
+    }
+  ]
+}
