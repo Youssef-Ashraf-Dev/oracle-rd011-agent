@@ -212,7 +212,7 @@ def present_plan_node(state: dict) -> dict:
     print("\u2500" * 60)
     if doc_conflicts:
         print("  To override a recommended resolution, include it in your feedback.")
-        print("  Example: 'Conflict 1: Use 3-way matching, not 4-way.'")
+        print("  Example: 'Conflict 1: use the value from the latest approved scope document.'")
         print()
     print("  Type APPROVE to proceed, or type feedback to revise the plan:")
     print("\u2500" * 60)

@@ -1,39 +1,282 @@
 """
-RD.011 Agent — RAG Ingest Pipeline.
+RD.011 Agent - RAG ingest pipeline.
 
-Parse example RD.011 documents, chunk by section, embed, and store in Chroma.
+Parses example RD.011 .docx files, chunks them using structure-aware rules,
+and stores chunks in Chroma with rich metadata for retrieval.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import re
+import sys
+import time
 from pathlib import Path
+from typing import Any, Iterable
 
-from rag.config_rag import (
-    CHROMA_DB_PATH,
-    COLLECTION_NAME,
-    get_embedding_function,
-)
+# Allow running as `python rag/ingest.py ...` as well as `python -m rag.ingest ...`.
+# When run as a script, Python sets sys.path[0] to `.../rag`, so `import rag.*` fails
+# unless we add the project root to sys.path.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from rag.config_rag import CHROMA_DB_PATH, COLLECTION_NAME, get_embedding_function
 
 logger = logging.getLogger(__name__)
 
+MIN_CHUNK_CHARS = 200
 
-def parse_and_chunk_examples(docs_dir: Path) -> list:
+SECTION_TYPES = {
+    "document_control",
+    "intro",
+    "how_organized",
+    "enterprise_structure",
+    "ledger",
+    "coa",
+    "module_overview",
+    "process_outline",
+    "process_narrative",
+    "process_steps",
+    "journal_entries",
+    "key_requirements",
+    "process_diagram",
+    "issues_open",
+    "issues_closed",
+    "other",
+}
+
+INGEST_BATCH_SIZE = 80
+INGEST_MAX_RETRIES = 2
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())
+
+
+def _heading_level(paragraph: Any) -> int | None:
+    style_name = paragraph.style.name if paragraph.style else ""
+    if style_name.startswith("Heading"):
+        try:
+            return int(style_name.split()[-1])
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+def _iter_block_items(doc: Any) -> Iterable[Any]:
     """
-    Parse all .docx files in docs_dir, chunk by section, and return Document objects.
+    Yield paragraphs and tables in the order they appear in the document body.
+    """
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
-    Chunking strategy:
-    - Split at double newlines (section boundaries in Docx2txt)
-    - Min chunk size: 200 chars
-    - Max chunk size: 2000 chars
-    - Overlap: 100 chars (preserve some context across chunks)
+    body = doc.element.body
+    for child in body.iterchildren():
+        if child.tag.endswith("}p"):
+            yield Paragraph(child, doc)
+        elif child.tag.endswith("}tbl"):
+            yield Table(child, doc)
 
-    Each chunk will have metadata:
-    - source: filename
-    - section: First heading in the chunk
-    - chunk_index: Sequential position
+
+def _table_to_markdown(table: Any) -> str:
+    """
+    Convert a python-docx table to a markdown-like string.
+    """
+    rows: list[list[str]] = []
+    for row in table.rows:
+        row_cells: list[str] = []
+        for cell in row.cells:
+            row_cells.append(
+                " ".join((p.text or "").strip() for p in cell.paragraphs if (p.text or "").strip())
+            )
+        rows.append(row_cells)
+    if not rows:
+        return ""
+
+    # Deduplicate repeated merged-cell text per row
+    cleaned: list[list[str]] = []
+    for r in rows:
+        out: list[str] = []
+        prev = None
+        for cell in r:
+            if cell != prev:
+                out.append(cell)
+            prev = cell
+        cleaned.append(out)
+
+    max_cols = max(len(r) for r in cleaned)
+    for r in cleaned:
+        while len(r) < max_cols:
+            r.append("")
+
+    lines: list[str] = []
+    header = cleaned[0]
+    lines.append("| " + " | ".join(header) + " |")
+    lines.append("| " + " | ".join("---" for _ in header) + " |")
+    for r in cleaned[1:]:
+        lines.append("| " + " | ".join(r) + " |")
+    return "\n".join(lines)
+
+
+def _infer_module(text: str) -> str | None:
+    t = _norm(text)
+    if "accounts payable" in t or re.search(r"\bpayables\b", t):
+        return "AP"
+    if "accounts receivable" in t or re.search(r"\breceivables\b", t):
+        return "AR"
+    if "general ledger" in t:
+        return "GL"
+    if "fixed asset" in t or re.search(r"\bfixed assets\b", t):
+        return "FA"
+    if "cash management" in t or re.search(r"\btreasury\b", t):
+        return "CM"
+    return None
+
+
+def _parse_process_heading(text: str) -> tuple[str | None, str | None]:
+    """
+    Extract (process_id, process_name) from headings like:
+    - "AP.02 Create PO Invoice"
+    - "FA-07 Asset Retirement (Disposal)"
+    """
+    raw = (text or "").strip()
+    m = re.match(r"^(AP|AR|GL|FA|CM|CE)\s*[.\-]\s*(\d{2})\b[:.\-\s]*(.*)$", raw, flags=re.I)
+    if not m:
+        return None, None
+    mod = m.group(1).upper()
+    if mod == "CE":
+        mod = "CM"
+    num = m.group(2)
+    name = (m.group(3) or "").strip(" -:\t")
+    return f"{mod}.{num}", (name or None)
+
+
+def _infer_process_type(module: str | None, process_name: str) -> str | None:
+    t = _norm(process_name)
+    if any(k in t for k in ("supplier", "vendor", "customer", "chart of accounts", "coa")):
+        return "master_data"
+    if "prepayment" in t:
+        return "prepayment"
+    if "credit memo" in t or "debit memo" in t or "debit/credit" in t:
+        return "memo"
+    if "po invoice" in t or ("po" in t and "invoice" in t):
+        return "invoice_po"
+    if "manual invoice" in t or "non-po" in t or "non po" in t or "direct invoice" in t:
+        return "invoice_non_po"
+    if "payment" in t:
+        return "payment"
+    if "receipt" in t or "collection" in t:
+        return "receipt"
+    if "reconciliation" in t or "statement" in t:
+        return "reconciliation"
+    if "close" in t or "period end" in t or "month end" in t:
+        return "month_end_close"
+    if "journal" in t:
+        return "journal"
+    if "revaluation" in t:
+        return "revaluation"
+    if "budget" in t:
+        return "budgeting"
+    if module == "FA":
+        if "retire" in t or "disposal" in t:
+            return "asset_retirement"
+        if "transfer" in t:
+            return "asset_transfer"
+        if "impair" in t:
+            return "asset_impairment"
+        if "physical count" in t or "count" in t:
+            return "physical_count"
+        if "capitalize" in t or "capitalise" in t:
+            return "asset_capitalization"
+        if "add" in t or "addition" in t:
+            return "asset_addition"
+    return None
+
+
+def _classify_heading(text: str) -> str | None:
+    """
+    Map a heading/subheading to an internal section_type label.
+
+    This does not rely on exact template wording.
+    """
+    t = _norm(text)
+    if not t:
+        return None
+
+    if t == "document control":
+        return "document_control"
+    if t == "introduction":
+        return "intro"
+    if "how this document is organized" in t or "how this document is organised" in t:
+        return "how_organized"
+    if "enterprise structure" in t or "structure segments" in t or "business architecture" in t:
+        return "enterprise_structure"
+    if t == "narrative" or "process details" in t:
+        return "process_narrative"
+    if "process steps" in t or "process step" in t:
+        return "process_steps"
+    if "journal entry" in t or "journal entries" in t:
+        return "journal_entries"
+    if "key requirements" in t or "highlights" in t:
+        return "key_requirements"
+    if "process diagram" in t or "process flow diagram" in t:
+        return "process_diagram"
+    if "open issues" in t and "closed" not in t:
+        return "issues_open"
+    if "closed issues" in t:
+        return "issues_closed"
+    if "ledger" in t:
+        return "ledger"
+    if "chart of accounts" in t or re.search(r"\bcoa\b", t):
+        return "coa"
+
+    return None
+
+
+def _compute_retry_delay_seconds(error: Exception, attempt: int) -> float | None:
+    """
+    Return a retry delay in seconds for quota/rate-limit errors, else None.
+    """
+    text = str(error)
+    lower = text.lower()
+    if "429" not in text and "resource_exhausted" not in lower and "quota" not in lower:
+        return None
+
+    # Prefer provider-supplied delays when available.
+    m = re.search(r"retry\s+in\s+([0-9]+(?:\.[0-9]+)?)s", lower)
+    if m:
+        return float(m.group(1)) + 1.0
+
+    m = re.search(r"retrydelay['\"]?\s*[:=]\s*['\"]?([0-9]+)s", lower)
+    if m:
+        return float(m.group(1)) + 1.0
+
+    # Fallback exponential backoff capped at 60s.
+    return min(60.0, 5.0 * (2**attempt))
+
+
+def _stable_chunk_id(doc: dict[str, Any]) -> str:
+    """
+    Build a deterministic ID so repeated ingests upsert instead of duplicating.
+    """
+    meta = doc.get("metadata") or {}
+    source_path = str(meta.get("source_path") or meta.get("source") or "")
+    chunk_index = str(meta.get("chunk_index") or "")
+    section_type = str(meta.get("section_type") or "")
+    process_id = str(meta.get("process_id") or "")
+    raw = f"{source_path}|{chunk_index}|{section_type}|{process_id}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def parse_and_chunk_examples(docs_dir: Path) -> list[dict[str, Any]]:
+    """
+    Parse all .docx files in docs_dir into structure-aware chunks.
+
+    The output is a list of dicts:
+      {"page_content": str, "metadata": dict}
     """
     docs_dir = Path(docs_dir)
     if not docs_dir.exists():
@@ -47,155 +290,236 @@ def parse_and_chunk_examples(docs_dir: Path) -> list:
         logger.warning("No .docx files found in %s", docs_dir)
         return []
 
-    all_documents = []
+    all_documents: list[dict[str, Any]] = []
 
     for docx_file in docx_files:
         logger.info("Loading: %s", docx_file.name)
+        try:
+            from docx import Document
+        except Exception as exc:
+            raise RuntimeError("python-docx is required for RAG ingest.") from exc
 
         try:
-            try:
-                from langchain_community.document_loaders import Docx2txtLoader
-            except Exception as exc:
-                raise RuntimeError(
-                    "langchain_community is required for RAG ingest. "
-                    "Install with: pip install langchain-community"
-                ) from exc
+            doc = Document(str(docx_file))
 
-            loader = Docx2txtLoader(str(docx_file))
-            docs = loader.load()
+            current_module: str | None = None
+            current_process_id: str | None = None
+            current_process_name: str | None = None
+            current_process_type: str | None = None
+            current_section_type: str = "other"
+            current_section_heading: str | None = None
+            in_process_list = False
 
-            if docs:
-                # Docx2txtLoader returns list with one Document containing full text
-                full_text = docs[0].page_content
+            buf: list[str] = []
+            chunk_index = 0
 
-                # Chunk with recursion (tries double newline, then newline, then word boundary)
+            def flush() -> None:
+                nonlocal buf, chunk_index
+                text = "\n".join(line for line in buf if line).strip()
+                buf = []
+                if len(text) < MIN_CHUNK_CHARS:
+                    return
+
+                st = current_section_type if current_section_type in SECTION_TYPES else "other"
+                meta: dict[str, Any] = {
+                    "source": docx_file.name,
+                    "source_path": str(docx_file),
+                    "style_family": docx_file.name,
+                    "section_type": st,
+                    "section": (current_section_heading or "")[:140],
+                    "chunk_index": chunk_index,
+                }
+                if current_module:
+                    meta["module"] = current_module
+                if current_process_id:
+                    meta["process_id"] = current_process_id
+                if current_process_name:
+                    meta["process_name"] = current_process_name
+                if current_process_type:
+                    meta["process_type"] = current_process_type
+
+                all_documents.append({"page_content": text, "metadata": meta})
+                chunk_index += 1
+
+            for block in _iter_block_items(doc):
+                # Paragraph
+                if hasattr(block, "text"):
+                    text = (block.text or "").strip()
+                    if not text:
+                        continue
+
+                    lvl = _heading_level(block)
+                    if lvl is not None:
+                        flush()
+
+                        current_section_heading = text
+
+                        # Module detection resets process context.
+                        mod = _infer_module(text)
+                        if mod:
+                            current_module = mod
+                            current_process_id = None
+                            current_process_name = None
+                            current_process_type = None
+                            in_process_list = False
+
+                        ht = _norm(text)
+                        if "business processes" in ht or "list of processes" in ht or "business process" in ht:
+                            in_process_list = True
+
+                        pid, pname = _parse_process_heading(text)
+                        if pid:
+                            current_module = pid.split(".")[0]
+                            current_process_id = pid
+                            current_process_name = pname or current_process_name
+                            current_process_type = _infer_process_type(current_module, current_process_name or "")
+                            in_process_list = True
+
+                        cls = _classify_heading(text)
+
+                        # If we're inside a process list, treat short headings as process titles.
+                        if (
+                            in_process_list
+                            and current_module
+                            and not pid
+                            and cls is None
+                            and len(text) <= 120
+                            and lvl <= 3
+                        ):
+                            current_process_id = None
+                            current_process_name = text
+                            current_process_type = _infer_process_type(current_module, current_process_name)
+
+                        if cls:
+                            current_section_type = cls
+                        else:
+                            # Default to module overview when not a recognized subsection marker.
+                            current_section_type = "module_overview" if current_module else "other"
+
+                        buf.append(f"# {text}")
+                        continue
+
+                    buf.append(text)
+                    continue
+
+                # Table
+                table_md = ""
                 try:
-                    from langchain.text_splitter import RecursiveCharacterTextSplitter
-                except Exception as exc:
-                    raise RuntimeError(
-                        "langchain is required for RAG ingest. "
-                        "Install with: pip install langchain"
-                    ) from exc
+                    table_md = _table_to_markdown(block)
+                except Exception:
+                    table_md = ""
+                if table_md.strip():
+                    buf.append(table_md)
 
-                splitter = RecursiveCharacterTextSplitter(
-                    separators=["\n\n", "\n", " ", ""],
-                    chunk_size=2000,
-                    chunk_overlap=100,
-                    length_function=len,
-                )
-                chunks = splitter.split_text(full_text)
+            flush()
 
-                logger.info("  → Split into %d chunks", len(chunks))
-
-                # Create Document objects with metadata
-                for idx, chunk_text in enumerate(chunks):
-                    # Infer section name from first line if it looks like a heading
-                    lines = chunk_text.split("\n")
-                    section_name = lines[0][:80] if lines else "Unknown"
-
-                    doc_dict = {
-                        "page_content": chunk_text,
-                        "metadata": {
-                            "source": docx_file.name,
-                            "source_path": str(docx_file),
-                            "section": section_name,
-                            "chunk_index": idx,
-                        },
-                    }
-                    all_documents.append(doc_dict)
-
-            else:
-                logger.warning("  → No content loaded from %s", docx_file.name)
-
-        except Exception as e:
-            logger.error("  → Failed to load %s: %s", docx_file.name, e)
+        except Exception as exc:
+            logger.error("Failed to parse %s: %s", docx_file.name, exc)
             continue
 
     logger.info("Total chunks created: %d", len(all_documents))
     return all_documents
 
 
-def ingest_to_chroma(documents: list, collection_name: str = COLLECTION_NAME) -> int:
+def ingest_to_chroma(documents: list[dict[str, Any]], collection_name: str = COLLECTION_NAME) -> int:
     """
     Ingest documents into Chroma vector database.
-
-    If collection already exists, upsert (update/insert) to avoid duplicates.
-
-    Parameters
-    ----------
-    documents : list
-        List of document dicts with 'page_content' and 'metadata'.
-    collection_name : str
-        Name of the Chroma collection.
-
-    Returns
-    -------
-    int
-        Number of documents ingested.
     """
     if not documents:
         logger.info("No documents to ingest.")
         return 0
 
-    # Ensure Chroma DB directory exists
     CHROMA_DB_PATH.mkdir(parents=True, exist_ok=True)
     logger.info("Using Chroma DB at: %s", CHROMA_DB_PATH)
 
-    try:
-        embedding_func = get_embedding_function()
-    except Exception as e:
-        logger.error("Failed to initialize embedding function: %s", e)
-        raise
-
-    # Initialize Chroma with upsert capability
-    logger.info("Initializing Chroma collection '%s'...", collection_name)
+    embedding_func = get_embedding_function()
 
     try:
-        # Upsert: will create collection if not exists, or update existing docs
-        try:
-            from langchain_chroma import Chroma
-        except Exception as exc:
-            raise RuntimeError(
-                "langchain_chroma is required for RAG ingest. "
-                "Install with: pip install langchain-chroma"
-            ) from exc
+        from langchain_chroma import Chroma
+    except Exception as exc:
+        raise RuntimeError(
+            "langchain_chroma is required for RAG ingest. Install with: pip install langchain-chroma"
+        ) from exc
 
-        vector_db = Chroma.from_documents(
-            documents=[
-                type("Document", (), {
-                    "page_content": doc["page_content"],
-                    "metadata": doc["metadata"],
-                })()
-                for doc in documents
-            ],
-            embedding=embedding_func,
-            collection_name=collection_name,
-            persist_directory=str(CHROMA_DB_PATH),
+    vector_db = Chroma(
+        collection_name=collection_name,
+        persist_directory=str(CHROMA_DB_PATH),
+        embedding_function=embedding_func,
+    )
+
+    total_batches = (len(documents) + INGEST_BATCH_SIZE - 1) // INGEST_BATCH_SIZE
+    ingested_count = 0
+    stopped_due_to_quota = False
+
+    for start in range(0, len(documents), INGEST_BATCH_SIZE):
+        end = min(start + INGEST_BATCH_SIZE, len(documents))
+        batch = documents[start:end]
+        texts = [doc["page_content"] for doc in batch]
+        metadatas = [doc["metadata"] for doc in batch]
+        ids = [_stable_chunk_id(doc) for doc in batch]
+        batch_no = (start // INGEST_BATCH_SIZE) + 1
+
+        for attempt in range(INGEST_MAX_RETRIES + 1):
+            try:
+                vector_db.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+                ingested_count += len(batch)
+                logger.info(
+                    "Ingested batch %d/%d (%d chunks).",
+                    batch_no,
+                    total_batches,
+                    len(batch),
+                )
+                break
+            except Exception as exc:
+                delay_seconds = _compute_retry_delay_seconds(exc, attempt)
+                if delay_seconds is None:
+                    raise
+                if attempt >= INGEST_MAX_RETRIES:
+                    logger.error(
+                        "Quota/rate limit persisted for batch %d/%d after %d attempts. "
+                        "Stopping ingest early with %d/%d chunks stored. Re-run later to continue.",
+                        batch_no,
+                        total_batches,
+                        INGEST_MAX_RETRIES + 1,
+                        ingested_count,
+                        len(documents),
+                    )
+                    stopped_due_to_quota = True
+                    break
+                logger.warning(
+                    "Embedding rate limit on batch %d/%d (attempt %d/%d). Retrying in %.1fs.",
+                    batch_no,
+                    total_batches,
+                    attempt + 1,
+                    INGEST_MAX_RETRIES,
+                    delay_seconds,
+                )
+                time.sleep(delay_seconds)
+
+        if stopped_due_to_quota:
+            break
+
+    persist_fn = getattr(vector_db, "persist", None)
+    if callable(persist_fn):
+        persist_fn()
+    else:
+        logger.info("Chroma persist() not available; relying on automatic persistence.")
+
+    logger.info("Ingested %d chunks into Chroma collection '%s'.", ingested_count, collection_name)
+    if stopped_due_to_quota:
+        logger.warning(
+            "Ingestion finished early due to quota limits. Stored %d/%d chunks.",
+            ingested_count,
+            len(documents),
         )
-
-        # Persist to disk
-        vector_db.persist()
-
-        logger.info("✓ Successfully ingested %d documents into Chroma.", len(documents))
-        logger.info("  Collection: %s", collection_name)
-        logger.info("  Location: %s", CHROMA_DB_PATH)
-
-        # Print sample metadata
-        if documents:
-            logger.info("\nSample metadata from first chunk:")
-            logger.info("  %s", json.dumps(documents[0]["metadata"], indent=2))
-
-        return len(documents)
-
-    except Exception as e:
-        logger.error("Failed to ingest into Chroma: %s", e)
-        raise
+    if documents:
+        logger.info("Sample metadata: %s", json.dumps(documents[0]["metadata"], indent=2))
+    return ingested_count
 
 
-def main():
-    """CLI entry point for ingest pipeline."""
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Ingest example RD.011 documents into Chroma vector store.",
+        description="Ingest example RD.011 documents into a Chroma vector store.",
     )
     parser.add_argument(
         "--docs-dir",
@@ -220,13 +544,9 @@ def main():
     logger.info("Starting RAG ingest pipeline...")
     logger.info("Examples directory: %s", args.docs_dir)
 
-    try:
-        documents = parse_and_chunk_examples(args.docs_dir)
-        ingested = ingest_to_chroma(documents, collection_name=args.collection)
-        logger.info("\n✓ Ingestion complete: %d documents stored.", ingested)
-    except Exception as e:
-        logger.error("Ingest pipeline failed: %s", e)
-        raise SystemExit(1)
+    documents = parse_and_chunk_examples(args.docs_dir)
+    ingested = ingest_to_chroma(documents, collection_name=args.collection)
+    logger.info("Ingestion complete: %d chunks stored.", ingested)
 
 
 if __name__ == "__main__":

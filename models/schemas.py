@@ -59,7 +59,7 @@ class DocumentConflict(BaseModel):
 
     field: str = Field(
         ...,
-        description="Name of the conflicting data point, e.g. 'Invoice matching method'",
+        description="Name of the conflicting data point (for example, 'approval matrix version')",
     )
     older_value: str = Field(
         ...,
@@ -78,8 +78,8 @@ class DocumentConflict(BaseModel):
     recommended_resolution: str = Field(
         ...,
         description=(
-            "Which value to apply and why — e.g. "
-            "'Use newer value: 4-way matching per 2026 Scope document'"
+            "Which value to apply and why, based on explicit source evidence "
+            "and document recency"
         ),
         min_length=1,
     )
@@ -95,6 +95,10 @@ class ExtractionResult(BaseModel):
     )
     business_actors: Dict[str, List[str]] = Field(
         ..., description="module code → list of actor names"
+    )
+    org_roles: dict[str, list[str]] = Field(
+    default_factory=dict,
+    description="Actual org roles per module confirmed from MoM documents"
     )
     requirements_per_module: Dict[str, List[str]] = Field(
         ..., description="module code → list of requirement strings"
@@ -159,6 +163,14 @@ class SectionPlan(BaseModel):
     module_intro: str = Field(
         ..., description="Key highlights paragraph for this module"
     )
+    business_actors: List[str] = Field(
+        default_factory=list,
+        description="Canonical actor labels suggested for this module section",
+    )
+    org_roles: List[str] = Field(
+        default_factory=list,
+        description="Client-specific organizational roles confirmed from MoM",
+    )
     processes: List[ProcessEntry]
     ambiguities: List[str] = Field(default_factory=list)
 
@@ -186,7 +198,6 @@ class ProcessStep(BaseModel):
     )
     action: str = Field(..., min_length=1)
     description: str = Field(..., min_length=1)
-    step_type: Literal["Manual Step", "System Assisted", "System Automated", "Decision"]
     business_actor: str = Field(..., min_length=1)
 
     @field_validator("step_id")
@@ -235,6 +246,10 @@ class SectionContent(BaseModel):
     )
     key_requirements: List[str] = Field(
         ..., min_length=1, description="3-8 bullet points"
+    )
+    missing_info: List[str] = Field(
+        default_factory=list,
+        description="Process-level unresolved facts not confirmed in the MoM",
     )
     diagram_code: str = Field(
         ...,

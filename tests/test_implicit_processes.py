@@ -353,6 +353,47 @@ class TestOrderAndRenumber:
         assert ids == ["Test Client.GL.01", "Test Client.GL.02"]
 
 
+class TestFixedSectionOrder:
+    """Test deterministic module ordering for chapters/section queue."""
+
+    def _section(self, section_id: str, module_name: str) -> SectionPlan:
+        return SectionPlan(
+            section_id=section_id,
+            module_name=module_name,
+            module_intro="Intro",
+            processes=[
+                ProcessEntry(
+                    process_id=f"{section_id}.01",
+                    process_name=f"{module_name} process",
+                    process_description="Desc",
+                    output="Output",
+                    confidence="high",
+                )
+            ],
+        )
+
+    def test_enforce_fixed_section_order_normalizes_aliases(self):
+        from nodes.plan_node import _enforce_fixed_section_order
+
+        plan = DocumentPlan(
+            client_name="Test Client",
+            project_name="Test Project",
+            document_ref="RD.011",
+            author="Agent",
+            version="DRAFT 1A",
+            sections=[
+                self._section("GL", "General Ledger"),
+                self._section("CE", "Cash Management"),
+                self._section("AP", "Accounts Payable"),
+                self._section("AR", "Accounts Receivable"),
+                self._section("FA", "Fixed Assets"),
+            ],
+        )
+
+        ordered = _enforce_fixed_section_order(plan)
+        assert [section.section_id for section in ordered.sections] == ["AP", "AR", "GL", "FA", "CM"]
+
+
 class TestImplicitProcessConfig:
     """Test loading and structure of implicit processes config file."""
 

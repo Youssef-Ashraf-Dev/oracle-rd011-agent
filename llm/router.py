@@ -29,7 +29,7 @@ def _build_google_client(model: str, task_type=None):
     if not GOOGLE_API_KEY:
         raise ValueError("GOOGLE_API_KEY is not set in environment.")
 
-    # LARGE_CONTEXT tasks: apply thinking_level="low" for faster inference
+    # LARGE_CONTEXT tasks: apply thinking_level="medium" for balance in reasoning and inference speed.
     kwargs = {
         "model": model,
         "google_api_key": GOOGLE_API_KEY,
@@ -37,7 +37,7 @@ def _build_google_client(model: str, task_type=None):
         "convert_system_message_to_human": True,
     }
     if task_type == TaskType.LARGE_CONTEXT:
-        kwargs["thinking_level"] = "low"
+        kwargs["thinking_level"] = "medium"
 
     return ChatGoogleGenerativeAI(**kwargs)
 

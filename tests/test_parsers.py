@@ -2,13 +2,12 @@
 RD.011 Agent — Parser unit tests.
 
 Tests docx_parser and excel_parser against real sample files.
-These tests require the sample files in samples/inputs/ to exist.
+These tests use sample files under samples/inputs_gosaibi_fin_2022/ and
+samples/inputs_ssem_fin_2024/ when available.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -18,18 +17,21 @@ from parsers.excel_parser import parse_excel
 
 # Resolve sample paths relative to repository root
 REPO_ROOT = Path(__file__).parent.parent
-SAMPLES_DIR = REPO_ROOT / "samples" / "inputs"
+
+SAMPLES_MOM_DIR = REPO_ROOT / "samples" / "inputs_gosaibi_fin_2022"
+SAMPLES_Q_DIR = REPO_ROOT / "samples" / "inputs_ssem_fin_2024"
 
 # Sample file names — skip if not present
-AP_MOM = SAMPLES_DIR / "AP20_Formatted.docx"
-GL_MOM = SAMPLES_DIR / "Dec_19_2022_GL_Analysis_MOM_Presentation_Ready.docx"
-AR_MOM = SAMPLES_DIR / "AR_Full.docx"
-QUESTIONNAIRE = SAMPLES_DIR / "FIN Questionnaire_.xlsx"
-REQUIREMENTS_DOC = SAMPLES_DIR / "Oracle_Financials_Requirements_Agreed_PainPoints.docx"
+AP_MOM = SAMPLES_MOM_DIR / "AP20_Formatted.docx"
+GL_MOM = SAMPLES_MOM_DIR / "Dec_19_2022_GL_Analysis_MOM_Presentation_Ready.docx"
+AR_MOM = SAMPLES_MOM_DIR / "AR_Full.docx"
+
+QUESTIONNAIRE = SAMPLES_Q_DIR / "AP Questionnaire with Answers.xlsx"
+REQUIREMENTS_DOC = SAMPLES_MOM_DIR / "Oracle_Financials_Requirements_Agreed_PainPoints.docx"
 
 requires_samples = pytest.mark.skipif(
-    not SAMPLES_DIR.exists(),
-    reason="samples/inputs/ directory not found",
+    not (SAMPLES_MOM_DIR.exists() or SAMPLES_Q_DIR.exists()),
+    reason="samples inputs directories not found",
 )
 
 

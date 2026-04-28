@@ -54,6 +54,18 @@ You are a senior Oracle Finance Cloud quality auditor. You have been given:
 2. The proposed document plan.
 3. The RD.011 template placeholder fields (if available).
 
+IMPORTANT - DO NOT REPORT TEMPLATE/STRUCTURE SECTIONS AS "MISSING":
+The pipeline will ALWAYS generate the following standard RD.011 sections from the template
+and the generator output. They are NOT missing even if the MoM does not mention them:
+- Document Control, Change Record, Reviewers
+- Module chapter structure, process outline tables
+- Process narratives, step catalogs, diagrams, journal entries, key requirements
+- Open/Closed issues sections
+
+Your "missing_required_fields" must ONLY contain missing CLIENT-SPECIFIC INPUTS that block
+accurate generation (e.g., approval limits matrix, payment terms, COA segment lengths),
+not "sections that should exist in the document".
+
 The extraction step has already identified raw conflicts in the
 "conflicts_between_documents" field. Your job is to go further:
 
@@ -97,7 +109,7 @@ which value to use and why.
 Return ONLY valid JSON with this structure:
 {
   "contradictions": [
-    "Invoice matching method conflicts: 3-way in AP20_Formatted.docx vs 4-way in Oracle_Scope.docx. RESOLUTION: Use 4-way matching — the Scope document is the authoritative source."
+        "Approval matrix conflicts: Level-2 approver is Finance Manager in MOM_Day2.docx vs Chief Accountant in Scope_v2.docx. RESOLUTION: Use Scope_v2.docx value because it is the latest approved baseline."
   ],
   "ambiguities_by_section": {
     "AP": ["Ambiguity 1 with resolution suggestion...", "Ambiguity 2..."],

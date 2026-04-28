@@ -30,29 +30,47 @@ IMPORTANT RULES:
    - Number of Legal Entities
    - Approval Limits
    - Chart of Accounts segments
-   - Invoice matching method (2-way, 3-way, or 4-way — capture exactly \
-     what the client's documents specify; do NOT default to 3-way if \
-     the documents are silent, list it as an open question instead)
+  - Transaction control settings and process-specific policies (capture exactly \
+    what the client's documents specify; if silent, record as open question)
 3. Map every requirement back to its source filename.
 4. If a data point is mentioned in multiple files with different values, use \
    the NEWEST document's value but record the discrepancy in open_questions.
 5. Identify open questions where the MoM is ambiguous or incomplete.
 6. Return ONLY valid JSON — no markdown fences, no commentary outside the JSON.
-7. Business actors SHOULD use the canonical labels listed below. If a source
-   uses different terminology, map it to the closest canonical label. If no close
-   match exists, keep the original actor name.
+  JSON MUST be strict syntax: double quotes, no trailing commas, no comments.
+7. business_actors must be derived from roles that are actually present in
+  this client's source documents. The canonical list below is only a
+  normalization vocabulary, not a source of truth. Do NOT invent actors
+  from the canonical list when they are not mentioned in source files.
+8. Extract the actual organizational roles and departments that exist at 
+   this client from the source documents. Record them in "org_roles". 
+   This list will be used to constrain business actor names in the generated 
+   document — only roles that actually exist at the client should appear.
+   If the MoMs mention specific department names or role titles, capture them.
+   If a role from the canonical list is NOT mentioned anywhere in the source 
+   documents, do NOT include it in org_roles.
+9. requirements_per_module must contain ONLY current-state requirements to be \
+   used for section generation. Do NOT include unresolved conflict prose, older \
+   superseded values, comparison text (e.g., X vs Y), or open-question wording.
+   If two values conflict, keep the selected current value in requirements and \
+   record the contradiction in conflicts_between_documents.
 
 CONFLICT DETECTION — CRITICAL:
 For EVERY data point that appears with different values across different source \
 files, you MUST add a structured entry to "conflicts_between_documents".
 A conflict entry is required when:
-  - Two files state different values for the same fact (e.g. 3-way vs 4-way matching)
-  - One file adds requirements not present in another
-  - An older MoM contradicts a newer Scope or vice versa
-  - Approval limits, entity counts, currencies, or GL segments differ
+  - Two files BOTH state explicit, incompatible values for the same fact
+  - An older MoM and newer Scope explicitly disagree on that same fact
+  - Approval limits, entity counts, currencies, control rules, or GL segments differ
+
+A conflict entry is NOT required when:
+  - One file is silent and another file provides a value
+  - One file adds detail while not contradicting the other
+  - The values are equivalent but phrased differently
+  - The difference is only wording, not business meaning
 
 For each conflict, record:
-  - field: the exact data point that conflicts (e.g. "Invoice matching method")
+  - field: the exact data point that conflicts (generic business fact name)
   - older_value: the value from the older/earlier document, with filename in parentheses
   - newer_value: the value from the newer/later document, with filename in parentheses
   - module: which Oracle module this affects (AP / AR / GL / FA / CM / ALL)
@@ -67,8 +85,15 @@ OUTPUT SCHEMA (return exactly this structure):
   "project_name": "string",
   "modules_in_scope": ["AP", "AR", "GL", ...],
   "business_actors": {
-    "AP": ["AP Clerk", "AP Manager", ...],
+    "AP": ["AP Accountant", "Finance Manager", ...],
     "GL": ["GL Accountant", ...]
+  },
+  "org_roles": {
+    "AP": ["role 1", "role 2"],
+    "AR": ["role 1", "role 2"],
+    "GL": ["role 1"],
+    "FA": ["role 1"],
+    "CM": ["role 1", "role 2"]
   },
   "requirements_per_module": {
     "AP": ["requirement 1 [source: filename.docx]", ...],
@@ -78,11 +103,11 @@ OUTPUT SCHEMA (return exactly this structure):
   "open_questions": ["question about ambiguity...", ...],
   "conflicts_between_documents": [
     {
-      "field": "Invoice matching method",
-      "older_value": "3-way matching (source: AP20_Formatted.docx)",
-      "newer_value": "4-way matching — PO + Receipt + Inspection + Invoice (source: Oracle_Scope.docx)",
-      "module": "AP",
-      "recommended_resolution": "Use 4-way matching per the Scope document which supersedes the earlier MoM"
+      "field": "Data point name",
+      "older_value": "Older explicit value (source: older_file.ext)",
+      "newer_value": "Newer explicit value (source: newer_file.ext)",
+      "module": "AP|AR|GL|FA|CM|ALL",
+      "recommended_resolution": "Use newer value because document date indicates supersession"
     }
   ],
   "enterprise_context": "Free text describing org structure, number of legal entities, ledger details, COA segments, currencies, etc."
@@ -109,14 +134,17 @@ def build_extraction_prompt(raw_texts: Dict[str, str]) -> str:
     file_sections = []
     for filename, content in raw_texts.items():
         file_sections.append(
-            f"═══ FILE: {filename} ═══\n{content}\n═══ END OF {filename} ═══"
+        f"[BEGIN FILE: {filename}]\n{content}\n[END FILE: {filename}]"
         )
 
     files_block = "\n\n".join(file_sections)
 
     return f"""{EXTRACTION_SYSTEM_PROMPT}
 
-## Canonical Business Actor Names (use EXACTLY these)
+## Canonical Business Actor Names (normalization hints only)
+
+Use this list only to normalize naming when a role is explicitly present in
+the source documents. Do not add roles from this list unless evidence exists.
 
 {CANONICAL_ACTORS_BLOCK}
 

@@ -11,7 +11,13 @@ from __future__ import annotations
 import re
 from typing import List
 
-from config import CANONICAL_BUSINESS_ACTORS
+_SECTION_ALLOWED_ORACLE_NAMES = {
+  "AP": "Oracle Payables",
+  "AR": "Oracle Receivables",
+  "GL": "Oracle General Ledger",
+  "FA": "Oracle Fixed Assets",
+  "CM": "Oracle Cash Management",
+}
 
 GENERATION_SYSTEM_PROMPT = """\
 You are a senior Oracle Finance Cloud consultant writing one section of an \
@@ -21,6 +27,95 @@ CRITICAL RULE: Every business-specific detail — matching method, approval leve
 currencies, netting, custom fields, document types, integration points — MUST \
 come from the "Requirements from MoM" section provided below. \
 Do NOT invent requirements. Do NOT assume any configuration not explicitly stated.
+
+
+═══════════════════════════════════════════════════
+ANTI-REPETITION, GROUNDEDNESS, AND SCOPE RULES — READ FIRST
+═══════════════════════════════════════════════════
+PATTERN-BASED QUALITY CHECKS:
+  - Do NOT write reusable boilerplate that could fit another process unchanged.
+  - Each narrative paragraph must include at least one process anchor from MoM:
+    transaction/document type, actor role, control rule, exception path,
+    integration endpoint, or output artifact.
+  - State the specific operational consequence of failure for this process.
+
+Weak pattern examples to avoid:
+  ✗ Generic value statements with no process anchor.
+  ✗ Module integration statements with no concrete business rule.
+  ✗ Requirements that can be pasted into another process unchanged.
+
+Strong pattern examples:
+  ✓ "Duplicate supplier records in Oracle Payables lead to double payments and reconciliation failures."
+  ✓ "Uninvoiced PO receipts cause accrual misstatements if not matched before month-end cut-off."
+
+ORACLE MODULE NAMES — use ONLY these exact names:
+  AP processes:  "Oracle Payables"
+  AR processes:  "Oracle Receivables"
+  GL processes:  "Oracle General Ledger"
+  FA processes:  "Oracle Fixed Assets"
+  CM processes:  "Oracle Cash Management"
+
+Features within a module are referenced as features, not modules:
+  ✓ "The Invoice Approval Workflow within Oracle Payables will route..."
+  ✓ "Oracle Payables AutoMatch will reconcile..."
+  ✗ "Oracle Cloud's Payment Management module will..."
+  ✗ "Oracle Invoice Management will be configured to..."
+
+HALLUCINATION PREVENTION — SPECIFIC NUMBERS:
+  The 'MoM only' rule applies with extra force to:
+  approval level counts, monetary thresholds, percentage values, day counts.
+
+  If a number is not in the Requirements from MoM section below:
+    ✗ Do NOT write it. Not even as a 'typical' or 'best practice' value.
+    ✓ Add a missing_info item, e.g. "Approval threshold amount not confirmed in MoM"
+
+  Examples of numbers to NEVER invent:
+    ✗ "Reversals require approval if amount exceeds $5,000"
+    ✗ "Two sequential approval levels defined in the Authority Matrix"
+       (unless the MoM says so for THIS module)
+    ✗ "Payment terms of Net 30" (unless stated)
+
+WRONG SCOPE — KEY REQUIREMENTS TEST:
+  Before writing each key requirement, ask:
+  'Could this requirement appear unchanged in a different process in the same module?'
+  If YES → remove it or rewrite it to be process-specific.
+
+  Cross-process contamination patterns to NEVER do:
+    ✗ Writing '4-way matching required' in a PAYMENT process
+       (matching logic belongs in the INVOICE process only)
+    ✗ Writing 'monthly closing cycle' in any process except Month End Closing
+    ✗ Writing 'integration with [Module]' as a standalone requirement
+    ✗ Writing a master data requirement in a transaction process
+    ✗ Writing 'approval workflow required' in a non-approval process
+ 
+PROCESS-SPECIFIC ACCURACY (CONDITIONAL):
+  Apply this section ONLY when process_name/process_description indicates the
+  matching process type. If the process type does not match, ignore that rule.
+
+  If process is Direct Invoice (non-PO):
+    This process has NO purchase order.
+    NEVER mention: PO matching, procurement approval, procurement department.
+
+  If process is Debit Memo / Credit Memo:
+    Do NOT reference "AP Invoice Approval Workflow" (invoice-only).
+    Use memo approval routing if approvals are mentioned in MoM.
+
+  If process is Payment Cancellation / Receipt Reversal:
+    These reverse already-approved transactions.
+    Do not reintroduce invoice approval workflow steps.
+    Do not invent approval thresholds not stated in the MoM.
+
+  If process is Month End Closing:
+    Key requirements must describe the module-specific closing checklist.
+    Do not copy operational requirements from other process types.
+
+PRE-OUTPUT SELF-CHECK (MANDATORY):
+  1) Every narrative paragraph includes at least one MoM-backed process anchor.
+  2) Every key requirement is specific to this process.
+  3) No invented numbers or unstated thresholds.
+  4) Module names are exact.
+  5) missing_info contains unresolved facts instead of guesses.
+
 
 ═══════════════════════════════════════════════════
 SECTION 1 — NARRATIVE
@@ -32,12 +127,16 @@ STRUCTURE (follow this order):
   Paragraph 1: State the BUSINESS PROBLEM this process solves. What manual \
 effort, risk, or inefficiency does it address? Be specific to this client.
   Paragraph 2: Describe how Oracle Cloud handles this process — name the exact \
-Oracle module or feature (e.g. "Oracle Payables", "Oracle Revenue Management", \
+Oracle module or feature (e.g. "Oracle Payables", "Oracle Receivables", \
 "the AP Invoice Approval Workflow"). Describe the flow at a high level.
   Paragraph 3+ (if needed): Describe key exception paths, integrations, or \
 configuration decisions specific to this client.
 
 STYLE RULES:
+  - Write in clear client-facing language with short, direct sentences.
+  - Explain what users do, what Oracle does, and why it matters operationally.
+  - Prefer active voice and concrete verbs; avoid generic marketing phrasing.
+  - Keep terminology consistent and avoid repeating the same sentence pattern.
   - Start the first sentence with the process subject, NOT with \
 "The client will utilize Oracle Cloud to..."
   - Do NOT embed step-type labels like [Manual] or [System] inside the narrative.
@@ -57,23 +156,15 @@ SECTION 2 — PROCESS STEPS (5–15 steps)
 
 Each step is a real Oracle Cloud UI action or a manual business activity.
 
-STEP TYPE — use exactly these four values:
-  "Manual Step"       — performed entirely outside Oracle (physical receipt, \
-phone call, paper form, physical delivery)
-  "System Assisted"   — user performs an action WITHIN Oracle Cloud \
-(entering data, running a program, clicking approve) — THIS IS THE MOST COMMON TYPE
-  "System Automated"  — Oracle performs this step with NO user action required \
-(background process, automatic notification, system-generated output)
-  "Decision"          — a yes/no branch point (approval gate, validation check, \
-threshold test)
-
 STEP ID FORMAT: {MODULE}-{PROCESS_NUM}-{NN}
   Examples: AP-02-01, GL-03-05, FA-01-08
   Use zero-padded two-digit sequence numbers.
 
-BUSINESS ACTOR NAMES — use ONLY the canonical labels listed below. \
+BUSINESS ACTOR NAMES — use ONLY the approved actor list provided in context.
 Pick the correct role for each step.
-  Use "System" ONLY for System Automated steps with no human actor.
+  Use "System" only for background/system-triggered actions without a human performer.
+  Do NOT invent role titles in narrative, key_requirements, or process_steps.
+  If a role is needed but not in the approved list, add it under missing_info.
 
 DECISION STEPS — every process with conditional logic MUST include at least \
 one Decision step. Real Oracle processes always have approval gates or \
@@ -212,6 +303,11 @@ OUTPUT FORMAT
 
 Return ONLY a valid JSON object matching this schema. No markdown fences. \
 No text before or after the JSON.
+JSON MUST be strict RFC-8259 style:
+  - double quotes for keys and strings
+  - no trailing commas
+  - no comments
+  - no extra top-level keys beyond the schema below
 The "process_id" value MUST be exactly the Process ID shown above (Module.NN only, no client prefix).
 
 {
@@ -223,7 +319,6 @@ The "process_id" value MUST be exactly the Process ID shown above (Module.NN onl
       "step_id": "AP-01-01",
       "action": "string (concise label, max 6 words)",
       "description": "string (1-2 sentences, what happens)",
-      "step_type": "Manual Step|System Assisted|System Automated|Decision",
       "business_actor": "string (Oracle-standard role title)"
     }
   ],
@@ -236,6 +331,7 @@ The "process_id" value MUST be exactly the Process ID shown above (Module.NN onl
     }
   ],
   "key_requirements": ["string (specific business rule)", ...],
+  "missing_info": ["string (fact not confirmed in MoM)", ...],
   "diagram_code": "digraph G { ... }"
 }
 """
@@ -245,7 +341,8 @@ def build_generation_prompt(
     section_plan,
     process,
     requirements_text: str,
-    rag_context: str,
+    rag_style_context: str = "",
+    rag_step_context: str = "",
 ) -> str:
     """
     Build the full generation prompt for a single process.
@@ -258,8 +355,10 @@ def build_generation_prompt(
         The ProcessEntry being generated.
     requirements_text
         Formatted requirements text for this module.
-    rag_context
-        Retrieved examples from the knowledge base (may be empty).
+    rag_style_context
+        Retrieved examples for tone/phrasing (may be empty).
+    rag_step_context
+        Retrieved examples for step decomposition/diagrams (may be empty).
 
     Returns
     -------
@@ -269,21 +368,47 @@ def build_generation_prompt(
     # Build business actors list — used as swimlane hints for the LLM
     actors_list = getattr(section_plan, "business_actors", []) \
         if hasattr(section_plan, "business_actors") else []
-    actors_text = ", ".join(actors_list) if actors_list else "(see requirements)"
-    canonical_actors = ", ".join(CANONICAL_BUSINESS_ACTORS)
+    # Get client-specific org roles from extraction if available
+    org_roles = getattr(section_plan, "org_roles", [])
+    use_strict_org_roles = bool(org_roles)
+    if org_roles:
+        actors_text = ", ".join(org_roles)
+    elif actors_list:
+        actors_text = ", ".join(actors_list)
+    else:
+        actors_text = "(use only standard Oracle role names for this module)"
 
     rag_section = ""
-    if rag_context:
-        rag_section = f"""
-## Retrieved Examples (quality benchmark — do not copy verbatim)
-{rag_context}
-"""
+    if rag_style_context or rag_step_context:
+        rag_section = "\n## Retrieved Examples (patterns only - do not copy verbatim)\n"
+        if rag_style_context:
+            rag_section += f"\n### STYLE EXEMPLARS\n{rag_style_context}\n"
+        if rag_step_context:
+            rag_section += f"\n### STEP/DIAGRAM EXEMPLARS\n{rag_step_context}\n"
 
     # Sanitize process_id: extract just the MODULE.NN portion (e.g. "AP.01")
-    # LLMs sometimes output full client name like "AL Gosaibi Co.AP.01"
+    # LLMs sometimes output a full client-prefixed id like "Client Name.AP.01"
     pid_raw = process.process_id
     pid_match = re.search(r'([A-Z]{2,3}\.\d{2})(?:\s|$|\.)', pid_raw)
     clean_pid = pid_match.group(1) if pid_match else pid_raw
+
+    strict_actor_block = ""
+    if use_strict_org_roles:
+      strict_actor_block = (
+        "These roles are confirmed from this client's MoM documents.\n"
+        "Do NOT use any actor not on this list.\n"
+        "Use \"System\" only for fully automated steps."
+      )
+    else:
+      strict_actor_block = (
+        "Use only roles listed above when provided by extraction data.\n"
+        "Do NOT invent departments or role titles not present in the source documents.\n"
+        "Use \"System\" only for fully automated steps."
+      )
+
+    module_key = str(getattr(section_plan, "section_id", "") or "").upper()
+    section_oracle_name = _SECTION_ALLOWED_ORACLE_NAMES.get(module_key, section_plan.module_name)
+    allowed_oracle_refs = f"Oracle Cloud, Oracle Finance Cloud, {section_oracle_name}"
 
     return f"""{GENERATION_SYSTEM_PROMPT}
 {rag_section}
@@ -293,8 +418,12 @@ Process ID: {clean_pid}
 Process Name: {process.process_name}
 Process Description: {process.process_description}
 Expected Output: {process.output}
-Business Actors (use these as swimlane labels): {actors_text}
-Canonical Business Actor Names (use EXACTLY these): {canonical_actors}
+APPROVED BUSINESS ACTORS FOR THIS CLIENT — use ONLY from this list:
+{actors_text}
+  {strict_actor_block}
+ALLOWED ORACLE PRODUCT REFERENCES FOR THIS SECTION ONLY:
+{allowed_oracle_refs}
+Do NOT mention Oracle product/module names outside this allowlist.
 Confidence Level: {process.confidence}
 
 Requirements from MoM:

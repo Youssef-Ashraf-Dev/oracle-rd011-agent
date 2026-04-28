@@ -108,7 +108,6 @@ class TestProcessStep:
             step_id="AP-02-01",
             action="Create Invoice",
             description="Navigate to Payables > Invoices > Create",
-            step_type="System Assisted",
             business_actor="AP Specialist",
         )
         assert step.step_id == "AP-02-01"
@@ -118,7 +117,6 @@ class TestProcessStep:
             step_id="GL-01-001",
             action="Open Journal",
             description="Create a manual journal entry.",
-            step_type="Manual Step",
             business_actor="GL Accountant",
         )
         assert step.step_id == "GL-01-001"
@@ -129,7 +127,6 @@ class TestProcessStep:
                 step_id="ap-01-01",
                 action="Create Invoice",
                 description="Navigate to create invoice screen.",
-                step_type="System Assisted",
                 business_actor="AP Specialist",
             )
 
@@ -139,29 +136,7 @@ class TestProcessStep:
                 step_id="AP-01",
                 action="Create Invoice",
                 description="Navigate to create invoice screen.",
-                step_type="System Assisted",
                 business_actor="AP Specialist",
-            )
-
-    def test_step_type_values(self):
-        for stype in ["Manual Step", "System Assisted", "System Automated", "Decision"]:
-            step = ProcessStep(
-                step_id="AP-01-01",
-                action="Action",
-                description="Description",
-                step_type=stype,
-                business_actor="Actor",
-            )
-            assert step.step_type == stype
-
-    def test_invalid_step_type(self):
-        with pytest.raises(ValidationError):
-            ProcessStep(
-                step_id="AP-01-01",
-                action="Action",
-                description="Description",
-                step_type="Automated",  # Not a valid literal
-                business_actor="Actor",
             )
 
 
@@ -173,7 +148,6 @@ class TestSectionContent:
             step_id="AP-01-01",
             action="Navigate to Payables",
             description="Open Oracle Cloud Payables module.",
-            step_type="System Assisted",
             business_actor="AP Specialist",
         )
 
@@ -205,12 +179,13 @@ class TestSectionContent:
         data = self._valid_section()
         section = SectionContent(**data)
         assert section.process_id == "AP.01"
+        assert section.missing_info == []
 
     def test_section_process_id_normalizes_double_dot(self):
         section = SectionContent(
-            **self._valid_section(process_id="AL Gosaibi Co..AP.08")
+            **self._valid_section(process_id="Client Name..AP.08")
         )
-        assert section.process_id == "AL Gosaibi Co.AP.08"
+        assert section.process_id == "Client Name.AP.08"
 
     def test_narrative_too_short(self):
         with pytest.raises(ValidationError) as exc_info:

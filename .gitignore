@@ -55,6 +55,7 @@ rd011_agent.log
 
 
 # md arch files
+Guide/
 *.md
 # exclude readme.md
 !README.md

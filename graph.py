@@ -21,18 +21,18 @@ from langgraph.graph import END, StateGraph
 
 from config import CHECKPOINT_DB_PATH
 from nodes import (
-    assemble_document_node,
-    await_approval_node,
-    detect_issues_node,
-    error_handler_node,
+    ingest_node,
     extract_node,
+    plan_node,
+    detect_issues_node,
+    present_plan_node,
+    await_approval_node,
+    update_plan_node,
     generate_intro_node,
     generate_section_node,
-    ingest_node,
-    plan_node,
-    present_plan_node,
     render_diagrams_node,
-    update_plan_node,
+    assemble_document_node,
+    error_handler_node,
 )
 from state import RD011State
 
@@ -46,6 +46,42 @@ try:
     _SQLITE_AVAILABLE = True
 except ImportError:
     _SQLITE_AVAILABLE = False
+
+
+# Flow overview:
+# ingest -> extract -> plan -> detect_issues -> present_plan -> await_approval
+# await_approval -> generate_intro | update_plan | error_handler
+# update_plan -> present_plan
+# generate_intro -> generate_section
+# generate_section -> generate_section | render_diagrams
+# render_diagrams -> assemble_document -> END
+# error_handler -> END
+
+_NODE_ORDER = [
+    ("ingest", ingest_node),
+    ("extract", extract_node),
+    ("plan", plan_node),
+    ("detect_issues", detect_issues_node),
+    ("present_plan", present_plan_node),
+    ("await_approval", await_approval_node),
+    ("update_plan", update_plan_node),
+    ("generate_intro", generate_intro_node),
+    ("generate_section", generate_section_node),
+    ("render_diagrams", render_diagrams_node),
+    ("assemble_document", assemble_document_node),
+    ("error_handler", error_handler_node),
+]
+
+_ROUTE_AFTER_APPROVAL = {
+    "generate_intro": "generate_intro",
+    "update_plan": "update_plan",
+    "error_handler": "error_handler",
+}
+
+_ROUTE_AFTER_SECTION = {
+    "generate_section": "generate_section",
+    "render_diagrams": "render_diagrams",
+}
 
 
 def route_after_approval(state: RD011State) -> str:
@@ -74,18 +110,8 @@ def build_graph():
     builder = StateGraph(RD011State)
 
     # ── Add all nodes ────────────────────────────────────────────────────
-    builder.add_node("ingest", ingest_node)
-    builder.add_node("extract", extract_node)
-    builder.add_node("plan", plan_node)
-    builder.add_node("detect_issues", detect_issues_node)
-    builder.add_node("present_plan", present_plan_node)
-    builder.add_node("await_approval", await_approval_node)
-    builder.add_node("update_plan", update_plan_node)
-    builder.add_node("generate_intro", generate_intro_node)
-    builder.add_node("generate_section", generate_section_node)
-    builder.add_node("render_diagrams", render_diagrams_node)
-    builder.add_node("assemble_document", assemble_document_node)
-    builder.add_node("error_handler", error_handler_node)
+    for node_name, node_callable in _NODE_ORDER:
+        builder.add_node(node_name, node_callable)
 
     # ── Entry point ──────────────────────────────────────────────────────
     builder.set_entry_point("ingest")
@@ -101,11 +127,7 @@ def build_graph():
     builder.add_conditional_edges(
         "await_approval",
         route_after_approval,
-        {
-            "generate_intro": "generate_intro",
-            "update_plan": "update_plan",
-            "error_handler": "error_handler",
-        },
+        _ROUTE_AFTER_APPROVAL,
     )
 
     # Update plan loops back to present_plan
@@ -116,7 +138,7 @@ def build_graph():
     builder.add_conditional_edges(
         "generate_section",
         route_after_section,
-        {"generate_section": "generate_section", "render_diagrams": "render_diagrams"},
+        _ROUTE_AFTER_SECTION,
     )
 
     # ── Render then assemble ─────────────────────────────────────────────

@@ -29,28 +29,48 @@ Optional keys:
 ## Optional RAG knowledge base
 RAG is gated by `RAG_ENABLED` in `config.py` and uses Chroma locally.
 
+Embeddings default to a local model (`sentence-transformers/all-MiniLM-L6-v2`) to avoid API rate limits during ingest.
+You can override with env vars in `.env`:
+- `EMBEDDING_PROVIDER` (`local` or `google`)
+- `EMBEDDING_MODEL`
+- `EMBEDDING_DEVICE` (`cpu` or `cuda`)
+- `RAG_COLLECTION_NAME` (optional; defaults to `rd011_examples_local` for local embeddings)
+- `RAG_TRACE_RETRIEVAL` (optional; when true, logs every retrieval result per call)
+- `RAG_TRACE_PREVIEW_CHARS` (optional preview length for trace logs)
+
 To build the knowledge base:
 1. Place example RD.011 .docx files in `rag/examples/`.
 2. Run:
 ```bash
-python -m rag.ingest
+python -m rag.ingest --docs-dir rag/examples
 ```
 
-If the knowledge base is not built, the agent runs without RAG context.
+If `RAG_ENABLED=true` but the knowledge base is not built, the agent **fails fast** with a clear error.
+If `RAG_ENABLED=false`, the agent runs without RAG context.
+
+For a deeper RAG overview, see `RAG_SOLUTION_DESIGN.md`.
+
+## Design docs
+- `Guide/AGENT_FLOW.md` — architecture + flow diagram
+- `Guide/SEQUENCE_DIAGRAM.md` — sequence diagram + resume behavior
+- `Guide/INTERN_EXECUTION_CHECKLIST.md` — runbook checklist
+- `Guide/INTERN_DEEP_DIVE_GUIDE.md` — intern deep dive
 
 ## Usage
 Single MoM:
 ```bash
-python main.py --mom samples/inputs/AP20_Formatted.docx
+python main.py --mom samples/inputs_gosaibi_fin_2022/AP20_Formatted.docx
 ```
 
 Multiple MoMs and questionnaires:
 ```bash
 python main.py \
-  --mom samples/inputs/AP20_Formatted.docx \
-  --mom samples/inputs/GL_Analysis_MOM.docx \
-  --questionnaire "samples/inputs/FIN Questionnaire_.xlsx"
+  --mom samples/inputs_gosaibi_fin_2022/AP20_Formatted.docx \
+  --mom samples/inputs_gosaibi_fin_2022/Dec_19_2022_GL_Analysis_MOM_Presentation_Ready.docx \
+  --questionnaire "samples/inputs_ssem_fin_2024/AP Questionnaire with Answers.xlsx"
 ```
+
+Developer utilities live under `tools/` (Python) and `scripts/` (PowerShell).
 
 Resume an interrupted run:
 ```bash
@@ -122,7 +142,7 @@ rd011/
 
 ## Tests
 ```bash
-pytest -q
+conda run -n rd011-env --no-capture-output python -m pytest -q
 ```
 
 If pytest fails due to permissions on Windows temp directories, use a writable base temp path in your environment.

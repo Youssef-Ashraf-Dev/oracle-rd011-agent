@@ -11,31 +11,209 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from config import MAX_RETRIES, CAPABILITY_MAP, TaskType
+from config import (
+    MAX_RETRIES,
+    CAPABILITY_MAP,
+    MODEL_POLICY_BLOCKLIST,
+    LLM_TELEMETRY_ENABLED,
+    LLM_TELEMETRY_PATH,
+    FAIL_FAST_JSONDECODE_GENERATION,
+    TaskType,
+)
 from llm.router import get_client
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+_LOG_PREVIEW_CHARS = 280
+_TELEMETRY_LOCK = threading.Lock()
+
+
+def _emit_telemetry(event: str, **fields) -> None:
+    """Append one structured retry/routing event to JSONL telemetry."""
+    if not LLM_TELEMETRY_ENABLED:
+        return
+    try:
+        path = Path(LLM_TELEMETRY_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            **fields,
+        }
+        # Multiple concurrent generation workers may emit telemetry; serialize writes
+        # so JSONL lines are not interleaved.
+        with _TELEMETRY_LOCK:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.debug("Telemetry write failed: %s", exc)
+
+
+def _safe_preview(text: str, max_chars: int = _LOG_PREVIEW_CHARS) -> str:
+    """
+    Build a compact, redacted single-line preview for logs.
+
+    Redacts common credential patterns and escapes newlines so log entries stay
+    readable. Output is truncated to ``max_chars``.
+    """
+    if not text:
+        return "<empty>"
+
+    preview = str(text)
+
+    # Common secret patterns that can appear in model echoes.
+    redactions = [
+        (r"(?i)(api[_-]?key\s*[:=]\s*)(['\"]?)[^\s,;\"']+", r"\1\2[REDACTED]"),
+        (r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;\"']+", r"\1[REDACTED]"),
+        (r"\bsk-[A-Za-z0-9_-]{16,}\b", "[REDACTED]"),
+        (r"\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED]"),
+    ]
+    for pattern, replacement in redactions:
+        preview = re.sub(pattern, replacement, preview)
+
+    preview = preview.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    if len(preview) > max_chars:
+        return f"{preview[:max_chars]}..."
+    return preview
+
+
+def _strip_leading_code_fence(text: str) -> str:
+    """Remove a leading markdown code fence line if present (even if unclosed)."""
+    if not text:
+        return text
+    stripped = text.lstrip()
+    if not stripped.startswith("```"):
+        return text
+
+    # Remove the first fence line (``` or ```json). Keep the rest for JSON scanning.
+    nl = stripped.find("\n")
+    if nl == -1:
+        return ""
+    return stripped[nl + 1 :]
+
+
+def _extract_balanced_json(text: str) -> str:
+    """
+    Extract the first balanced JSON object/array from a string.
+
+    This handles common LLM failure modes:
+    - Prose before/after the JSON
+    - Unclosed markdown fences
+    - Multiple JSON snippets (takes the first complete one)
+
+    Returns empty string if nothing JSON-like is found.
+    """
+    if not text:
+        return ""
+
+    s = text
+    # Prefer scanning content after a leading code fence when present.
+    s = _strip_leading_code_fence(s)
+
+    # Find earliest plausible JSON start.
+    starts = [idx for idx in (s.find("{"), s.find("[")) if idx != -1]
+    if not starts:
+        return ""
+    start = min(starts)
+
+    stack: list[str] = []
+    in_string = False
+    escape = False
+
+    for i in range(start, len(s)):
+        ch = s[i]
+
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = False
+            continue
+
+        # Not in string
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == "{":
+            stack.append("}")
+            continue
+        if ch == "[":
+            stack.append("]")
+            continue
+
+        if stack and ch == stack[-1]:
+            stack.pop()
+            if not stack:
+                return s[start : i + 1].strip()
+
+    # Unbalanced; fall back to best-effort slice first->last close.
+    last_obj = s.rfind("}")
+    last_arr = s.rfind("]")
+    last = max(last_obj, last_arr)
+    if last != -1 and last > start:
+        return s[start : last + 1].strip()
+    return ""
 
 
 def _extract_json(text: str) -> str:
-    """Extract JSON from LLM response, handling markdown code fences."""
-    text = text.strip()
-    # Strip ```json ... ``` wrappers
-    if text.startswith("```"):
-        # Find end of first line (```json or ```)
-        first_newline = text.index("\n")
-        # Find closing ```
-        last_fence = text.rfind("```")
-        if last_fence > first_newline:
-            text = text[first_newline + 1 : last_fence].strip()
+    """Extract JSON from LLM response, handling markdown code fences and messy wrappers."""
+    text = (text or "").strip()
+    if not text:
+        return text
+
+    # Prefer a properly closed fenced block if present.
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        candidate = match.group(1).strip()
+        balanced = _extract_balanced_json(candidate)
+        return balanced or candidate
+
+    # Otherwise, extract the first balanced JSON object/array from the whole response.
+    balanced = _extract_balanced_json(text)
+    if balanced:
+        return balanced
+
+    # Last resort: keep old heuristic (first { to last }).
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        return text[first_brace : last_brace + 1].strip()
     return text
+
+
+def _repair_json_candidate(text: str) -> str:
+    """Apply lightweight repairs for common LLM JSON formatting mistakes."""
+    repaired = (text or "").strip()
+    if not repaired:
+        return repaired
+
+    # Normalize smart quotes and strip control characters.
+    repaired = (
+        repaired
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+    repaired = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", repaired)
+
+    # Remove trailing commas before JSON object/array closure.
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    return repaired
 
 
 def _build_retry_prompt(
@@ -96,9 +274,8 @@ def _sanitize_process_id(pid: str) -> str:
     Extract and clean process_id from malformed values.
 
     Handles cases like:
-      "AL Gosaibi Co.AP.01"  ->  "AP.01"
-      "AL.GO.AP.01"          ->  "AP.01"
-      "AL.GOSAIBI.CO.AP.01"  ->  "AP.01"
+            "Client Name.AP.01"    ->  "AP.01"
+            "Client.Region.AP.01"  ->  "AP.01"
       "AP-05-01"             ->  "AP.05"  (step_id format confused as process_id)
       "AP.01"                ->  "AP.01"  (already correct)
 
@@ -121,36 +298,21 @@ def _sanitize_process_id(pid: str) -> str:
     return pid
 
 
-def _sanitize_step_types(data: dict) -> dict:
-    """
-    Normalize legacy step_type values to the new vocabulary.
-    Does not count as a retry attempt.
+def _model_id(provider: str, model_name: str) -> str:
+    """Return normalized provider/model identifier used across logs and policy maps."""
+    return f"{provider}/{model_name}"
 
-    Mappings:
-      "Manual" -> "Manual Step"
-      "System" -> "System Assisted"
-      "System Generated" -> "System Automated"
-      Already-correct values are passed through unchanged.
-    """
-    if "process_steps" not in data:
-        return data
 
-    type_map = {
-        "Manual": "Manual Step",
-        "System": "System Assisted",
-        "System Generated": "System Automated",
-        "Manual Step": "Manual Step",  # Already correct
-        "System Assisted": "System Assisted",  # Already correct
-        "System Automated": "System Automated",  # Already correct
-        "Decision": "Decision",  # No change
-    }
-
-    for step in data.get("process_steps", []):
-        old_type = step.get("step_type", "")
-        if old_type:
-            step["step_type"] = type_map.get(old_type, old_type)
-
-    return data
+def _get_block_reason(
+    task_type: TaskType,
+    schema_name: str,
+    provider: str,
+    model_name: str,
+) -> str | None:
+    """Return policy reason if model is blocked for this task+schema, else None."""
+    task_rules = MODEL_POLICY_BLOCKLIST.get(task_type, {})
+    schema_rules = task_rules.get(schema_name, {})
+    return schema_rules.get(_model_id(provider, model_name))
 
 
 def call_with_retry(
@@ -163,6 +325,7 @@ def call_with_retry(
     Call an LLM via a cascade/waterfall of models, parsing JSON response into *schema*.
 
     Cascade order: primary model first, then fallback_chain entries.
+    Models in ``MODEL_POLICY_BLOCKLIST`` are skipped before first attempt.
     Skip to next model immediately on 429 (rate limit) or 400 (decommissioned).
     Retry the same model on ValidationError with a 3-second cooldown.
 
@@ -199,36 +362,92 @@ def call_with_retry(
         # Bare fallback_chain with no primary (legacy support)
         cascade = cfg["fallback_chain"]
 
+    schema_name = schema.__name__
+
+    # Policy filter: skip unsuitable models for this task+schema without spending retries.
+    blocked_models: list[tuple[str, str]] = []
+    filtered_cascade = []
+    for model_cfg in cascade:
+        provider = model_cfg["provider"]
+        model_name = model_cfg["model"]
+        reason = _get_block_reason(task_type, schema_name, provider, model_name)
+        if reason:
+            blocked_models.append((_model_id(provider, model_name), reason))
+            logger.warning(
+                "Policy skip for %s on %s/%s: %s",
+                schema_name,
+                task_type.value,
+                _model_id(provider, model_name),
+                reason,
+            )
+            continue
+        filtered_cascade.append(model_cfg)
+
+    if not filtered_cascade:
+        blocked_text = "; ".join(f"{m} ({r})" for m, r in blocked_models) or "none"
+        raise RuntimeError(
+            f"All models blocked by policy for {task_type.value}/{schema_name}. "
+            f"Blocked: {blocked_text}"
+        )
+
+    cascade = filtered_cascade
     tried = []
 
     for cascade_idx, model_cfg in enumerate(cascade, start=1):
         provider = model_cfg["provider"]
         model_name = model_cfg["model"]
-        tried.append(f"{provider}/{model_name}")
+        tried.append(_model_id(provider, model_name))
 
         logger.info(
             "Cascade attempt %d/%d for %s: trying %s/%s",
             cascade_idx, len(cascade), task_type.value, provider, model_name,
         )
+        _emit_telemetry(
+            "cascade_attempt",
+            task_type=task_type.value,
+            schema=schema_name,
+            cascade_index=cascade_idx,
+            cascade_total=len(cascade),
+            provider=provider,
+            model=model_name,
+        )
 
         try:
             client = get_client(provider, model_name, task_type)
-            result = _call_with_retry_single(client, prompt, schema, max_retries)
-            logger.info(
-                "Successfully generated %s via %s/%s",
-                schema.__name__, provider, model_name,
+            result = _call_with_retry_single(
+                client,
+                prompt,
+                schema,
+                max_retries,
+                task_type=task_type.value,
+                provider=provider,
+                model_name=model_name,
+            )
+            logger.info("Successfully generated %s via %s", schema_name, _model_id(provider, model_name))
+            _emit_telemetry(
+                "model_success",
+                task_type=task_type.value,
+                schema=schema_name,
+                provider=provider,
+                model=model_name,
+                cascade_index=cascade_idx,
             )
             return result
 
         except Exception as exc:
             exc_str = str(exc).lower()
 
-            # 429 (rate limit / quota) or 400 (decommissioned model) — skip immediately
+            # Rate-limit, request-size, or model-availability errors — skip immediately.
             is_skip = (
                 "429" in exc_str
                 or "400" in exc_str
+                or "413" in exc_str
                 or "rate_limit" in exc_str
                 or "too many requests" in exc_str
+                or "payload too large" in exc_str
+                or "request too large" in exc_str
+                or "context length" in exc_str
+                or "maximum context" in exc_str
                 or "resource_exhausted" in exc_str
                 or "decommissioned" in exc_str
                 or "model_not_found" in exc_str
@@ -239,8 +458,18 @@ def call_with_retry(
                 logger.warning(
                     "Model %s/%s skipped (%s). Falling back to %s/%s.",
                     provider, model_name,
-                    "rate limit" if "429" in exc_str else "bad request",
+                    "rate/payload/model error",
                     next_m["provider"], next_m["model"],
+                )
+                _emit_telemetry(
+                    "model_skipped",
+                    task_type=task_type.value,
+                    schema=schema_name,
+                    provider=provider,
+                    model=model_name,
+                    reason="rate/payload/model error",
+                    error_type=type(exc).__name__,
+                    error_text=str(exc)[:220],
                 )
                 continue
 
@@ -249,6 +478,15 @@ def call_with_retry(
                 logger.warning(
                     "Model %s/%s failed (%s: %s) — trying next fallback.",
                     provider, model_name, type(exc).__name__, str(exc)[:120],
+                )
+                _emit_telemetry(
+                    "model_failed",
+                    task_type=task_type.value,
+                    schema=schema_name,
+                    provider=provider,
+                    model=model_name,
+                    error_type=type(exc).__name__,
+                    error_text=str(exc)[:220],
                 )
                 continue
 
@@ -264,13 +502,17 @@ def _call_with_retry_single(
     prompt: str,
     schema: Type[T],
     max_retries: int,
+    *,
+    task_type: str,
+    provider: str,
+    model_name: str,
 ) -> T:
     """
     Inner retry loop for a single client (no fallback).
 
-    Retries with error injection on ValidationError.
+    Retries with error injection on JSON/schema validation failures.
     Adds a 3-second cooldown between validation retries to avoid TPM spikes.
-    429/400 errors are raised immediately so the cascade can skip to next model.
+    Transport/provider errors are raised immediately so the cascade can skip models.
     """
     current_prompt = prompt
     last_raw_response = ""
@@ -279,7 +521,14 @@ def _call_with_retry_single(
         logger.info("LLM call attempt %d/%d for %s", attempt, max_retries, schema.__name__)
 
         try:
+            started = time.perf_counter()
             response = client.invoke(current_prompt)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+        except Exception:
+            # Transport/provider errors must not be retried as validation failures.
+            raise
+
+        try:
             # LangChain chat models return AIMessage; extract content.
             # Newer Gemini models return content as a list of parts
             # e.g. [{"type": "text", "text": "..."}] — flatten to a string.
@@ -297,20 +546,117 @@ def _call_with_retry_single(
             last_raw_response = raw_text
 
             json_str = _extract_json(raw_text)
-            raw_dict = json.loads(json_str)
+            try:
+                raw_dict = json.loads(json_str)
+            except json.JSONDecodeError:
+                repaired_json = _repair_json_candidate(json_str)
+                if repaired_json == json_str:
+                    raise
+                raw_dict = json.loads(repaired_json)
             raw_dict = _sanitize_step_ids(raw_dict)
-            raw_dict = _sanitize_step_types(raw_dict)
             if "process_id" in raw_dict:
                 raw_dict["process_id"] = _sanitize_process_id(raw_dict["process_id"])
             result = schema.model_validate(raw_dict)
             logger.info("Validation passed on attempt %d", attempt)
+            _emit_telemetry(
+                "attempt_success",
+                task_type=task_type,
+                schema=schema.__name__,
+                provider=provider,
+                model=model_name,
+                attempt=attempt,
+                latency_ms=latency_ms,
+                prompt_chars=len(current_prompt),
+                response_chars=len(raw_text),
+            )
             return result
 
-        except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+        except json.JSONDecodeError as exc:
+            error_message = str(exc)
+            raw_preview = _safe_preview(last_raw_response)
+            json_candidate = _extract_json(last_raw_response) if last_raw_response else ""
+            json_preview = _safe_preview(json_candidate)
+
+            logger.warning(
+                "Attempt %d failed (%s): %s",
+                attempt,
+                type(exc).__name__,
+                error_message[:200],
+            )
+            _emit_telemetry(
+                "attempt_validation_failed",
+                task_type=task_type,
+                schema=schema.__name__,
+                provider=provider,
+                model=model_name,
+                attempt=attempt,
+                error_type=type(exc).__name__,
+                error_text=error_message[:220],
+                prompt_chars=len(current_prompt),
+                response_chars=len(last_raw_response),
+            )
+            logger.warning(
+                "Invalid JSON output preview for %s (attempt %d): "
+                "raw_len=%d, json_candidate_len=%d, raw_preview=%s, json_candidate_preview=%s",
+                schema.__name__,
+                attempt,
+                len(last_raw_response),
+                len(json_candidate),
+                raw_preview,
+                json_preview,
+            )
+
+            if (
+                FAIL_FAST_JSONDECODE_GENERATION
+                and task_type == TaskType.GENERATION.value
+                and schema.__name__ == "SectionContent"
+                and attempt < max_retries
+            ):
+                raise RuntimeError(
+                    "Fail-fast JSONDecodeError for generation/SectionContent; "
+                    f"skipping retries for {provider}/{model_name}"
+                ) from exc
+
+            if attempt < max_retries:
+                # 3-second cooldown between validation retries to avoid TPM spike
+                logger.debug("Validation retry cooldown: 3s to avoid TPM spike")
+                time.sleep(3)
+                current_prompt = _build_retry_prompt(
+                    original_prompt=prompt,
+                    error_message=error_message,
+                    previous_response=last_raw_response,
+                )
+                _emit_telemetry(
+                    "attempt_retry_prompt_built",
+                    task_type=task_type,
+                    schema=schema.__name__,
+                    provider=provider,
+                    model=model_name,
+                    attempt=attempt,
+                )
+            else:
+                raise RuntimeError(
+                    f"All {max_retries} retries exhausted for {schema.__name__}. "
+                    f"Last error: {error_message}"
+                ) from exc
+
+        except (ValidationError, ValueError) as exc:
             error_message = str(exc)
             logger.warning(
                 "Attempt %d failed (%s): %s",
                 attempt, type(exc).__name__, error_message[:200],
+            )
+            _emit_telemetry(
+                "attempt_validation_failed",
+                task_type=task_type,
+                schema=schema.__name__,
+                provider=provider,
+                model=model_name,
+                attempt=attempt,
+                error_type=type(exc).__name__,
+                error_text=error_message[:220],
+                prompt_chars=len(current_prompt),
+                response_chars=len(last_raw_response),
             )
 
             if attempt < max_retries:
@@ -321,6 +667,14 @@ def _call_with_retry_single(
                     original_prompt=prompt,
                     error_message=error_message,
                     previous_response=last_raw_response,
+                )
+                _emit_telemetry(
+                    "attempt_retry_prompt_built",
+                    task_type=task_type,
+                    schema=schema.__name__,
+                    provider=provider,
+                    model=model_name,
+                    attempt=attempt,
                 )
             else:
                 raise RuntimeError(

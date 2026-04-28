@@ -47,6 +47,8 @@ Based on the extraction results, write:
 
 Write in professional consultant style. Reference the client by name.
 Return ONLY valid JSON matching the IntroContent schema.
+JSON MUST be strict syntax: double quotes, no trailing commas, no comments.
+Do not include markdown, code fences, or extra top-level keys.
 
 OUTPUT SCHEMA:
 {
@@ -69,28 +71,29 @@ def generate_intro_node(state: dict) -> dict:
     extraction_data = state.get("extraction_result", {})
     errors = list(state.get("errors", []))
 
-    # Try RAG (optional)
-    rag_context = ""
+    # Try RAG (optional): intro + enterprise structure exemplars (style only).
+    rag_style_context = ""
     if RAG_ENABLED:
         try:
-            from rag.retriever import retrieve
-            docs = retrieve(
-                "introduction enterprise structure Oracle Finance Cloud",
-                top_k=TOP_K_RETRIEVAL,
+            from rag.retriever import build_exemplar_blocks
+
+            rag_style_context, _ = build_exemplar_blocks(
+                query="introduction enterprise structure ledger chart of accounts oracle finance cloud",
+                needed_types=["intro", "enterprise_structure", "ledger", "coa"],
+                module=None,
             )
-            rag_context = "\n\n".join(d.page_content for d in docs)
-        except NotImplementedError:
-            logger.info("RAG not available - generating intro without reference examples")
+            if rag_style_context:
+                logger.info("RAG intro exemplars selected: style_chars=%d", len(rag_style_context))
         except Exception as exc:
-            logger.warning("RAG query failed: %s ? continuing without RAG", exc)
+            logger.warning("RAG query failed: %s (continuing without RAG)", exc)
     else:
         logger.info("RAG disabled - generating intro without reference examples")
 
     extraction_json = json.dumps(extraction_data, indent=2, ensure_ascii=False)
 
     rag_section = ""
-    if rag_context:
-        rag_section = f"\n## Reference Examples (quality benchmark)\n{rag_context}\n"
+    if rag_style_context:
+        rag_section = f"\n## Reference Examples (patterns only - do not copy verbatim)\n{rag_style_context}\n"
 
     prompt = f"""{INTRO_SYSTEM_PROMPT}
 {rag_section}

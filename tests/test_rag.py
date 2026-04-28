@@ -33,23 +33,21 @@ class TestEmbeddingConfig:
     """Test RAG configuration and embedding function setup."""
 
     def test_embedding_config_defaults(self):
-        """Verify default embedding provider is 'google'."""
+        """Verify embedding provider supports configured defaults/providers."""
         from rag.config_rag import EMBEDDING_PROVIDER
 
-        assert EMBEDDING_PROVIDER in ("google", "openai", "groq")
+        assert EMBEDDING_PROVIDER in ("local", "google", "openai", "groq")
 
-    def test_get_embedding_function_called_without_error_when_api_key_exists(self):
-        """Test embedding function initialization with mocked API key."""
-        # Skip if GOOGLE_API_KEY not set
-        import os
-
-        if not os.getenv("GOOGLE_API_KEY"):
-            pytest.skip("GOOGLE_API_KEY not set; skipping embedding test")
-
+    @patch("rag.config_rag._get_local_embedding")
+    def test_get_embedding_function_routes_to_local_provider(self, mock_local):
+        """Test local embedding provider dispatch without loading model weights."""
         from rag.config_rag import get_embedding_function
 
-        embedding_func = get_embedding_function()
-        assert embedding_func is not None
+        mock_local.return_value = MagicMock()
+        with patch("rag.config_rag.EMBEDDING_PROVIDER", "local"):
+            embedding_func = get_embedding_function()
+
+        assert embedding_func is mock_local.return_value
 
 
 class TestIngest:
@@ -176,3 +174,99 @@ class TestRetriever:
                 mock_path.exists.return_value = True
                 results = retrieve("test query")
                 assert results == []
+
+    def test_build_exemplar_blocks_uses_adaptive_candidate_k(self):
+        """Candidate pool size should adapt to the number of needed types."""
+        import rag.retriever as retriever
+
+        with patch("rag.retriever.select_exemplars", return_value=([], [])):
+            with patch("rag.retriever.retrieve_candidates", return_value=[]) as mock_retrieve:
+                retriever.build_exemplar_blocks(
+                    query="AP invoice processing",
+                    needed_types=["process_narrative", "process_steps"],
+                    module="AP",
+                )
+
+                first_k = mock_retrieve.call_args_list[0].kwargs["k"]
+                assert first_k == max(retriever.TOP_K_RETRIEVAL, 8)
+
+            with patch("rag.retriever.retrieve_candidates", return_value=[]) as mock_retrieve:
+                retriever.build_exemplar_blocks(
+                    query="Finance intro",
+                    needed_types=["intro", "enterprise_structure", "ledger", "coa"],
+                    module="GL",
+                )
+
+                first_k = mock_retrieve.call_args_list[0].kwargs["k"]
+                assert first_k == max(retriever.TOP_K_RETRIEVAL, 16)
+
+    def test_build_exemplar_blocks_escalates_when_type_missing(self):
+        """Retriever should escalate candidate size before type-specific fallbacks."""
+        import rag.retriever as retriever
+
+        narrative_doc = retriever.Document(
+            page_content="Narrative example",
+            metadata={"source": "ex.docx", "section_type": "process_narrative", "chunk_index": "1"},
+            score=0.9,
+        )
+
+        retrieve_calls: list[dict] = []
+
+        def _fake_retrieve(query, k, filter=None, strategy="mmr"):
+            retrieve_calls.append({"query": query, "k": k, "filter": filter, "strategy": strategy})
+            return [narrative_doc]
+
+        with patch("rag.retriever.retrieve_candidates", side_effect=_fake_retrieve):
+            with patch(
+                "rag.retriever.select_exemplars",
+                side_effect=[([narrative_doc], ["process_steps"]), ([narrative_doc], ["process_steps"])],
+            ):
+                retriever.build_exemplar_blocks(
+                    query="AP invoice processing",
+                    needed_types=["process_narrative", "process_steps"],
+                    module="AP",
+                )
+
+        assert len(retrieve_calls) >= 2
+        assert retrieve_calls[1]["k"] > retrieve_calls[0]["k"]
+
+    def test_build_exemplar_blocks_fallback_avoids_combined_filter(self):
+        """Fallback calls should avoid combined module+section_type Chroma filters."""
+        import rag.retriever as retriever
+
+        narrative_doc = retriever.Document(
+            page_content="Narrative example",
+            metadata={"source": "ex.docx", "section_type": "process_narrative", "chunk_index": "1", "module": "FA"},
+            score=0.9,
+        )
+        steps_doc = retriever.Document(
+            page_content="Steps example",
+            metadata={"source": "ex.docx", "section_type": "process_steps", "chunk_index": "2", "module": "FA"},
+            score=0.8,
+        )
+
+        retrieve_calls: list[dict] = []
+
+        def _fake_retrieve(query, k, filter=None, strategy="mmr"):
+            retrieve_calls.append({"query": query, "k": k, "filter": filter, "strategy": strategy})
+            query_l = str(query).lower()
+            if "process steps" in query_l:
+                return [steps_doc]
+            return [narrative_doc]
+
+        with patch("rag.retriever.retrieve_candidates", side_effect=_fake_retrieve):
+            with patch(
+                "rag.retriever.select_exemplars",
+                side_effect=[([narrative_doc], ["process_steps"]), ([narrative_doc], ["process_steps"])],
+            ):
+                style_block, step_block = retriever.build_exemplar_blocks(
+                    query="FA invoice accounting",
+                    needed_types=["process_narrative", "process_steps"],
+                    module="FA",
+                )
+
+        assert style_block
+        assert step_block
+        for call in retrieve_calls:
+            filt = call["filter"]
+            assert not (isinstance(filt, dict) and "module" in filt and "section_type" in filt)

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 
-from config import CANONICAL_BUSINESS_ACTORS
 from models.schemas import ExtractionResult
 
 PLANNING_SYSTEM_PROMPT = """\
@@ -70,6 +69,19 @@ Use Oracle OUM standard names: Verb + Object (+ qualifier if needed).
   "Bank Statement Reconciliation" not "Manage Reconciliation"
   "Month End Closing"             not "Period Close Process"
 
+DUPLICATE PREVENTION:
+  Before finalising the process list, verify no two processes describe
+  the same activity. Common duplicate traps:
+
+    ✗ 'Create Journal Entry' AND 'Manual Journal Entry' → keep ONE:
+       'Manual Journal Entry' (Oracle OUM standard name)
+    ✗ 'Maintain Customer Data' appearing more than once in AR
+    ✗ 'Asset Addition' AND 'Mass Asset Addition' → keep ONE unless
+       the MoM explicitly distinguishes manual vs. mass workflows
+
+  If two process names are synonyms or one is a subset of the other,
+  merge them using the Oracle OUM standard name.  
+
 Terminology tolerance: clients may use different labels for the same process.
 If two names clearly describe the same process, keep ONE process using the
 client's terminology (or the closest OUM name) and avoid duplicates.
@@ -90,6 +102,12 @@ feature handles it, what it produces.
   confidence:          high (MoM has explicit detail) | medium (implied) | \
 low (inferred from scope only)
   missing_info:        Specific facts missing for this process. Empty if none.
+
+Section-level actor rule:
+  - org_roles for each section must be derived from extraction.org_roles
+    for that module (client-confirmed roles only).
+  - business_actors should be canonicalized labels derived from org_roles.
+  - If org_roles is empty for a module, return [] for both org_roles and business_actors.
 
 ═══════════════════════════════════════════════════
 RULE 5 — MODULE INTRO
@@ -115,6 +133,7 @@ appended by the system after planning — you do not need to include them.
 If a process appears in the MoM, its details override any implicit standard.
 
 Return ONLY valid JSON — no markdown fences, no commentary outside the JSON.
+JSON MUST use strict syntax (double quotes, no trailing commas, no comments).
 
 OUTPUT SCHEMA:
 {
@@ -128,6 +147,7 @@ OUTPUT SCHEMA:
       "section_id": "AP",
       "module_name": "Accounts Payable",
       "module_intro": "3-5 sentence paragraph specific to this client...",
+      "org_roles": ["AP Accountant", "Treasury Accountant"],
       "business_actors": ["AP Accountant", "Treasury Accountant"],
       "processes": [
         {
@@ -144,9 +164,6 @@ OUTPUT SCHEMA:
 }
 """
 
-CANONICAL_ACTORS_BLOCK = "\n".join(f"- {actor}" for actor in CANONICAL_BUSINESS_ACTORS)
-
-
 def build_planning_prompt(extraction: ExtractionResult) -> str:
     """
     Build the full planning prompt from extraction results.
@@ -155,16 +172,12 @@ def build_planning_prompt(extraction: ExtractionResult) -> str:
 
     return f"""{PLANNING_SYSTEM_PROMPT}
 
-## Canonical Business Actor Names (use EXACTLY these)
-
-{CANONICAL_ACTORS_BLOCK}
-
 ## Extraction Results
 
 {extraction_json}
 
 Based on the extraction results above, create a complete DocumentPlan \
-following Rules 1-6. Include only processes supported by the MOM. \
+following Rules 1-6. Include only processes supported by the MoM. \
 Process IDs must include the client name: {{ClientName}}.{{Module}}.{{NN}} (e.g. Contoso.AP.01, Contoso.GL.03). The NN does not need to be consecutive; the system will renumber based on the final logical order.
 
 Return ONLY the JSON object matching the DocumentPlan schema."""

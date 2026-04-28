@@ -17,6 +17,8 @@ from nodes.plan_node import (
     _load_implicit_processes,
     _augment_plan_with_implicit_processes,
     _order_and_renumber_processes,
+    _apply_section_actor_context,
+    _enforce_fixed_section_order,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,7 @@ def update_plan_node(state: dict) -> dict:
 
     # Extract structured document conflicts so the LLM can apply resolutions
     conflicts: list[DocumentConflict] = []
+    extraction: ExtractionResult | None = None
     if extraction_data:
         try:
             extraction = ExtractionResult.model_validate(extraction_data)
@@ -58,6 +61,8 @@ def update_plan_node(state: dict) -> dict:
         implicit_procs = _load_implicit_processes()
         updated_plan = _augment_plan_with_implicit_processes(updated_plan, implicit_procs)
         updated_plan = _order_and_renumber_processes(updated_plan, implicit_procs)
+        updated_plan = _apply_section_actor_context(updated_plan, extraction)
+        updated_plan = _enforce_fixed_section_order(updated_plan)
 
         # Rebuild section queue
         section_queue = [

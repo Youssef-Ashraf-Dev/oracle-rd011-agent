@@ -13,7 +13,7 @@ import logging
 import re
 from pathlib import Path
 
-from config import TaskType
+from config import TaskType, normalize_business_actor
 from llm.retry import call_with_retry
 from models.schemas import DocumentPlan, ExtractionResult, ProcessEntry
 from prompts.planning_prompt import build_planning_prompt
@@ -23,9 +23,154 @@ logger = logging.getLogger(__name__)
 # Path to implicit processes config (sibling to config.py)
 IMPLICIT_PROCESSES_CONFIG = Path(__file__).parent.parent / "config_implicit_processes.json"
 
+_PLURAL_TOKEN_MAP = {
+    "customers": "customer",
+    "suppliers": "supplier",
+    "entries": "entry",
+    "invoices": "invoice",
+    "assets": "asset",
+    "processes": "process",
+}
+
+_NAME_ALIAS_PATTERNS = (
+    (r"\bcreate journal entries?\b", "manual journal entry"),
+    (r"\bjournal entry creation\b", "manual journal entry"),
+    (r"\bmonth[- ]end close\b", "month end closing"),
+    (r"\bperiod clos(?:e|ing)\b", "month end closing"),
+    (r"\bmaintain customers data\b", "maintain customer data"),
+    (r"\bmaintain suppliers data\b", "maintain supplier data"),
+)
+
+_FIXED_MODULE_ORDER = ["AP", "AR", "GL", "FA", "CM"]
+
 def _normalize_name(name: str) -> str:
     cleaned = re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
     return " ".join(cleaned.split())
+
+
+def _canonical_process_name(name: str) -> str:
+    """Normalize process names for duplicate detection."""
+    normalized = _normalize_name(name)
+    if not normalized:
+        return ""
+
+    tokens = [_PLURAL_TOKEN_MAP.get(tok, tok) for tok in normalized.split()]
+    normalized = " ".join(tokens)
+
+    for pattern, replacement in _NAME_ALIAS_PATTERNS:
+        normalized = re.sub(pattern, replacement, normalized)
+
+    return " ".join(normalized.split())
+
+
+def _process_suffix(process_id: str) -> str:
+    """Extract the trailing MODULE.NN portion from any process_id format."""
+    if not process_id:
+        return ""
+    matches = re.findall(r"([A-Z]{2,3}\.\d{2})", str(process_id).upper())
+    return matches[-1] if matches else ""
+
+
+def _names_equivalent(left: str, right: str) -> bool:
+    """
+    Process-name equivalence used for dedup and implicit matching.
+
+    IMPORTANT:
+    We intentionally keep this strict to avoid accidentally dropping implicit
+    processes (user requirement: implicit list should be a minimum baseline).
+    More tolerant semantic matching (LLM-judged duplicates) is deferred.
+    """
+    left_norm = _canonical_process_name(left)
+    right_norm = _canonical_process_name(right)
+
+    if not left_norm or not right_norm:
+        return False
+    return left_norm == right_norm
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    """Remove duplicates while preserving original order."""
+    seen = set()
+    unique = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _enforce_fixed_section_order(plan: DocumentPlan) -> DocumentPlan:
+    """Enforce a deterministic module chapter order across all runs."""
+    module_aliases = {"CE": "CM"}
+    rank = {module: idx for idx, module in enumerate(_FIXED_MODULE_ORDER)}
+
+    indexed_sections = []
+    for original_idx, section in enumerate(plan.sections):
+        section_id = module_aliases.get(section.section_id, section.section_id)
+        section.section_id = section_id
+        indexed_sections.append((rank.get(section_id, len(rank) + original_idx), original_idx, section))
+
+    indexed_sections.sort(key=lambda item: (item[0], item[1]))
+    plan.sections = [section for _, _, section in indexed_sections]
+    return plan
+
+
+def _apply_section_actor_context(
+    plan: DocumentPlan,
+    extraction: ExtractionResult | None,
+) -> DocumentPlan:
+    """Attach client-confirmed actor lists to each section for generation constraints."""
+    if extraction is None:
+        return plan
+
+    module_aliases = {"CE": "CM"}
+    business_actor_map = extraction.business_actors or {}
+    org_roles_map = extraction.org_roles or {}
+
+    for section in plan.sections:
+        section_id = module_aliases.get(section.section_id, section.section_id)
+        section.section_id = section_id
+
+        extracted_business_actors = business_actor_map.get(section_id, [])
+        extracted_org_roles = org_roles_map.get(section_id, [])
+
+        if extracted_org_roles:
+            section.org_roles = _unique_preserve_order(extracted_org_roles)
+            normalized_roles = [normalize_business_actor(role) for role in section.org_roles]
+            section.business_actors = _unique_preserve_order(normalized_roles)
+        elif extracted_business_actors:
+            normalized_actors = [normalize_business_actor(actor) for actor in extracted_business_actors]
+            section.business_actors = _unique_preserve_order(normalized_actors)
+        else:
+            section.business_actors = _unique_preserve_order(section.business_actors)
+            section.org_roles = _unique_preserve_order(section.org_roles)
+
+    return plan
+
+
+def _deduplicate_processes(processes: list[ProcessEntry]) -> list[ProcessEntry]:
+    """Remove duplicate process entries by id or near-equivalent name, preserving order."""
+    deduped: list[ProcessEntry] = []
+    seen_suffixes: set[str] = set()
+    seen_names: list[str] = []
+
+    for proc in processes:
+        suffix = _process_suffix(proc.process_id)
+        name = proc.process_name or ""
+
+        if suffix and suffix in seen_suffixes:
+            continue
+        if name and any(_names_equivalent(name, existing) for existing in seen_names):
+            continue
+
+        deduped.append(proc)
+        if suffix:
+            seen_suffixes.add(suffix)
+        if name:
+            seen_names.append(name)
+
+    return deduped
 
 
 def _load_implicit_processes() -> list:
@@ -78,31 +223,44 @@ def _augment_plan_with_implicit_processes(plan: DocumentPlan, implicit_procs: li
             continue
 
         existing_names = [p.process_name for p in section.processes if p.process_name]
-        existing_norms = {_normalize_name(n) for n in existing_names if n}
+        existing_suffixes = {
+            _process_suffix(p.process_id)
+            for p in section.processes
+            if _process_suffix(p.process_id)
+        }
 
         def _is_present(imp: dict) -> bool:
             """
-            Strict baseline: only treat as present if the name matches exactly
-            after normalization (case/whitespace/punctuation-insensitive).
+            Treat as present if process_id suffix matches OR names are equivalent.
             """
             imp_name = imp.get("process_name") or ""
-            imp_norm = _normalize_name(imp_name)
-            return bool(imp_norm and imp_norm in existing_norms)
+            imp_suffix = _process_suffix(imp.get("process_id") or "")
+
+            if imp_suffix and imp_suffix in existing_suffixes:
+                return True
+
+            return bool(
+                imp_name and any(_names_equivalent(imp_name, existing) for existing in existing_names)
+            )
 
         def _mark_present(imp: dict) -> None:
             imp_name = imp.get("process_name") or ""
-            imp_norm = _normalize_name(imp_name)
+            imp_suffix = _process_suffix(imp.get("process_id") or "")
             if imp_name:
                 existing_names.append(imp_name)
-            if imp_norm:
-                existing_norms.add(imp_norm)
+            if imp_suffix:
+                existing_suffixes.add(imp_suffix)
 
         def _implicit_index_for_proc(proc: ProcessEntry) -> int | None:
-            name = _normalize_name(proc.process_name or "")
-            if not name:
+            name = proc.process_name or ""
+            suffix = _process_suffix(proc.process_id)
+            if not name and not suffix:
                 return None
             for idx, imp in module_entries:
-                if name == _normalize_name(imp.get("process_name") or ""):
+                imp_suffix = _process_suffix(imp.get("process_id") or "")
+                if suffix and imp_suffix and suffix == imp_suffix:
+                    return idx
+                if _names_equivalent(name, imp.get("process_name") or ""):
                     return idx
             return None
 
@@ -146,7 +304,7 @@ def _augment_plan_with_implicit_processes(plan: DocumentPlan, implicit_procs: li
             _mark_present(imp)
             last_idx = idx
 
-        section.processes = merged
+        section.processes = _deduplicate_processes(merged)
 
     return plan
 
@@ -203,6 +361,8 @@ def plan_node(state: dict) -> dict:
         implicit_procs = _load_implicit_processes()
         plan = _augment_plan_with_implicit_processes(plan, implicit_procs)
         plan = _order_and_renumber_processes(plan, implicit_procs)
+        plan = _apply_section_actor_context(plan, extraction)
+        plan = _enforce_fixed_section_order(plan)
 
         # Build section queue: "{section_id}.{process_id}" for each process
         section_queue = [

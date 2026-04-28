@@ -22,12 +22,17 @@ RULES:
 1. Apply ALL feedback points from the consultant.
 2. If the consultant overrides a document conflict resolution, use their \
    chosen value — not the originally recommended one.
-3. Maintain valid process_id format: ClientName.Module.NN or Module.NN (e.g., Contoso.AP.01).
+3. Maintain valid process_id format: ClientName.Module.NN (e.g., Contoso.AP.01).
+   Always include the client name prefix — never use bare Module.NN format.
 4. Keep processes in logical order; the system will renumber IDs after your update.
 5. Update module_intro paragraphs if the feedback changes the module scope.
 6. Preserve all unchanged sections exactly as they are.
 7. Update confidence levels and missing_info as appropriate.
-8. Return the COMPLETE revised DocumentPlan — not just the changed parts.
+8. Keep org_roles and business_actors consistent:
+    - org_roles = client-confirmed roles
+    - business_actors = canonicalized labels derived from org_roles
+9. JSON output must be strict syntax: double quotes, no trailing commas, no comments.
+10. Return the COMPLETE revised DocumentPlan — not just the changed parts.
 
 Return ONLY valid JSON matching the DocumentPlan schema. No markdown fences.
 """

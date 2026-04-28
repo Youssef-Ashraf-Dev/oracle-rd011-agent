@@ -19,9 +19,11 @@ import argparse
 import logging
 import sys
 import uuid
+from pathlib import Path
 
 from langgraph.types import Command
 
+from config import OUTPUT_DIR, RAG_ENABLED, TEMPLATE_PATH
 from graph import build_graph
 from state import RD011State
 
@@ -106,6 +108,29 @@ def _run_with_approval_loop(graph, first_input, config: dict, thread_id: str) ->
     return result
 
 
+def _validate_runtime_prerequisites() -> None:
+    """Fail fast on missing runtime dependencies and required paths."""
+    template = Path(TEMPLATE_PATH)
+    if not template.exists():
+        raise FileNotFoundError(f"Template not found: {template}")
+
+    out_dir = Path(OUTPUT_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if RAG_ENABLED:
+        from rag.config_rag import CHROMA_DB_PATH
+        from rag.retriever import get_rag_readiness_status
+
+        ready, reason = get_rag_readiness_status()
+        if not ready:
+            raise RuntimeError(f"RAG is enabled but not ready: {reason}")
+        if not CHROMA_DB_PATH.exists():
+            raise FileNotFoundError(
+                "RAG is enabled but Chroma DB is missing at "
+                f"{CHROMA_DB_PATH}. Run: python -m rag.ingest --docs-dir rag/examples"
+            )
+
+
 def main():
     """Entry point for the RD.011 document generator."""
     _setup_logging()
@@ -129,11 +154,18 @@ def main():
     )
     parser.add_argument(
         "--scope",
+        metavar="FILE",
         help="Path to Scope of Solution .docx",
     )
     parser.add_argument(
         "--questionnaire",
-        help="Path to Oracle Questionnaire .xlsx (optional)",
+        nargs="+",
+        action="append",
+        metavar="FILE",
+        help=(
+            "Path(s) to Oracle Questionnaire .xlsx files (optional). "
+            "Use one --questionnaire per file or provide multiple files after one flag."
+        ),
     )
     parser.add_argument(
         "--resume",
@@ -149,6 +181,14 @@ def main():
     # Validate arguments
     if not args.resume and not args.mom:
         parser.error("--mom is required for new runs (use --resume to continue an existing run)")
+
+    try:
+        _validate_runtime_prerequisites()
+    except Exception as exc:
+        logger = logging.getLogger(__name__)
+        logger.error("Startup validation failed: %s", exc)
+        print(f"Startup validation failed: {exc}")
+        sys.exit(2)
 
     graph = build_graph()
 
@@ -200,7 +240,16 @@ def main():
         if args.scope:
             input_files.append(args.scope)
         if args.questionnaire:
-            input_files.append(args.questionnaire)
+            # nargs="+" + action="append" -> flatten nested lists
+            for group in args.questionnaire:
+                input_files.extend(group)
+
+        missing_inputs = [p for p in input_files if not Path(p).exists()]
+        if missing_inputs:
+            print("Startup validation failed: one or more input files do not exist:")
+            for p in missing_inputs:
+                print(f"  - {p}")
+            sys.exit(2)
 
         initial_state: RD011State = {
             "thread_id": thread_id,

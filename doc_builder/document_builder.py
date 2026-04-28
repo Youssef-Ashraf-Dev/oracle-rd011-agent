@@ -418,7 +418,14 @@ class DocumentBuilder:
         self.doc.add_paragraph()
 
         # Per-process detail sections
+        written_ids: set[str] = set()
         for idx, proc in enumerate(section_plan.processes):
+            pid = proc.process_id
+            if pid in written_ids:
+                logger.warning("Duplicate process_id %s - skipping", pid)
+                continue
+            written_ids.add(pid)
+
             section_key = f"{section_plan.section_id}.{proc.process_id}"
             # Also try just process_id as key
             content = sections.get(section_key) or sections.get(proc.process_id)
