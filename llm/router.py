@@ -55,18 +55,7 @@ def _build_groq_client(model: str):
     )
 
 
-def _build_mistral_client(model: str):
-    """Build a ChatMistralAI client."""
-    from langchain_mistralai import ChatMistralAI
 
-    if not MISTRAL_API_KEY:
-        raise ValueError("MISTRAL_API_KEY is not set in environment.")
-    return ChatMistralAI(
-        model=model,
-        mistral_api_key=MISTRAL_API_KEY,
-        temperature=0.3,
-        max_tokens=8192,
-    )
 
 
 def _build_openrouter_client(model: str):
@@ -87,7 +76,6 @@ def _build_openrouter_client(model: str):
 _BUILDERS = {
     "google": lambda cfg, task_type=None: _build_google_client(cfg["model"], task_type),
     "groq": lambda cfg, task_type=None: _build_groq_client(cfg["model"]),
-    "mistral": lambda cfg, task_type=None: _build_mistral_client(cfg["model"]),
     "openrouter": lambda cfg, task_type=None: _build_openrouter_client(cfg["model"]),
 }
 

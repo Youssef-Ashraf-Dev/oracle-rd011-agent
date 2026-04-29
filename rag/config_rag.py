@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 from config import GOOGLE_API_KEY
@@ -47,6 +48,9 @@ COLLECTION_NAME = os.getenv("RAG_COLLECTION_NAME", _default_collection)
 DEFAULT_TOP_K = 5
 
 
+_EMBEDDING_LOCK = threading.Lock()
+_EMBEDDING_CACHE = None
+
 def get_embedding_function():
     """
     Return a Chroma-compatible embedding function.
@@ -62,21 +66,28 @@ def get_embedding_function():
         An embedding function that Chroma can use for vectorization.
         Raises NotImplementedError if provider is not configured or API key missing.
     """
-    if EMBEDDING_PROVIDER in {
-        "local",
-        "huggingface",
-        "sentence-transformers",
-        "sentence_transformers",
-    }:
-        return _get_local_embedding()
-    if EMBEDDING_PROVIDER == "google":
-        return _get_google_embedding()
-    else:
-        logger.warning(
-            "Embedding provider '%s' not recognized. Falling back to no-op.",
-            EMBEDDING_PROVIDER,
-        )
-        return _get_noop_embedding()
+    global _EMBEDDING_CACHE
+    with _EMBEDDING_LOCK:
+        if _EMBEDDING_CACHE is not None:
+            return _EMBEDDING_CACHE
+
+        if EMBEDDING_PROVIDER in {
+            "local",
+            "huggingface",
+            "sentence-transformers",
+            "sentence_transformers",
+        }:
+            _EMBEDDING_CACHE = _get_local_embedding()
+        elif EMBEDDING_PROVIDER == "google":
+            _EMBEDDING_CACHE = _get_google_embedding()
+        else:
+            logger.warning(
+                "Embedding provider '%s' not recognized. Falling back to no-op.",
+                EMBEDDING_PROVIDER,
+            )
+            _EMBEDDING_CACHE = _get_noop_embedding()
+
+        return _EMBEDDING_CACHE
 
 
 def _get_local_embedding():

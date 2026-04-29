@@ -54,6 +54,11 @@ IMPORTANT RULES:
    superseded values, comparison text (e.g., X vs Y), or open-question wording.
    If two values conflict, keep the selected current value in requirements and \
    record the contradiction in conflicts_between_documents.
+10. If a Minutes of Meeting includes a "Key Points Discussed" section with bullet
+  items, capture those bullet items as candidate processes only (do not expand
+  them) in candidate_processes. Group them by module code if clear; otherwise
+  use "ALL". Keep each item short and include [source: filename].
+  Do NOT add candidate_processes unless they appear in those bullets.
 
 CONFLICT DETECTION — CRITICAL:
 For EVERY data point that appears with different values across different source \
@@ -98,6 +103,10 @@ OUTPUT SCHEMA (return exactly this structure):
   "requirements_per_module": {
     "AP": ["requirement 1 [source: filename.docx]", ...],
     "GL": ["requirement 1 [source: filename.docx]", ...]
+  },
+  "candidate_processes": {
+    "AP": ["candidate process [source: filename.docx]", ...],
+    "ALL": ["candidate process [source: filename.docx]", ...]
   },
   "constraints": ["constraint 1", ...],
   "open_questions": ["question about ambiguity...", ...],

@@ -10,6 +10,7 @@ table cells.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from docx import Document
@@ -36,6 +37,28 @@ def _heading_level(paragraph) -> int | None:
             if val is not None:
                 return int(val) + 1
     return None
+
+
+def _normalize_heading(text: str) -> str:
+    cleaned = (text or "").lower()
+    cleaned = re.sub(r"[^a-z0-9\s]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _is_key_points_heading(text: str) -> bool:
+    return _normalize_heading(text) == "key points discussed"
+
+
+def _is_list_paragraph(paragraph) -> bool:
+    style_name = paragraph.style.name if paragraph.style else ""
+    if any(token in style_name.lower() for token in ("list", "bullet", "number")):
+        return True
+
+    pPr = paragraph._element.find(qn("w:pPr"))
+    if pPr is None:
+        return False
+    return pPr.find(qn("w:numPr")) is not None
 
 
 def _get_cell_text(cell: _Cell) -> str:
@@ -138,6 +161,8 @@ def parse_docx(file_path: str) -> str:
 
     output_parts: list[str] = []
 
+    current_heading = ""
+
     for element in doc.element.body:
         tag = element.tag.split("}")[-1] if "}" in element.tag else element.tag
 
@@ -153,8 +178,15 @@ def parse_docx(file_path: str) -> str:
             if level is not None:
                 prefix = "#" * level
                 output_parts.append(f"{prefix} {text}")
+                current_heading = text
             else:
-                output_parts.append(text)
+                if _is_key_points_heading(current_heading) and _is_list_paragraph(para):
+                    if text.startswith("-") or text.startswith("•"):
+                        output_parts.append(text)
+                    else:
+                        output_parts.append(f"- {text}")
+                else:
+                    output_parts.append(text)
 
         elif tag == "tbl":
             # It's a table

@@ -118,6 +118,22 @@ class TestDocxParser:
         assert "Level One" in result
         assert "Level Two" in result
 
+    def test_parse_docx_key_points_discussed_bullets(self, tmp_path):
+        """Key Points Discussed bullets should be preserved with '-' prefix."""
+        from docx import Document
+
+        doc = Document()
+        doc.add_paragraph("Key Points Discussed", style="Heading 2")
+        doc.add_paragraph("Petty cash employees will be defined as suppliers", style="List Bullet")
+        doc.add_paragraph("Monthly petty cash reconciliation required", style="List Bullet")
+        docx_path = tmp_path / "key_points.docx"
+        doc.save(str(docx_path))
+
+        result = parse_docx(str(docx_path))
+        assert "Key Points Discussed" in result
+        assert "- Petty cash employees will be defined as suppliers" in result
+        assert "- Monthly petty cash reconciliation required" in result
+
     def test_parse_docx_empty_document(self, tmp_path):
         """An empty docx should return an empty string without raising."""
         from docx import Document

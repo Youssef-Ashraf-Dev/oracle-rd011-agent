@@ -103,6 +103,12 @@ class ExtractionResult(BaseModel):
     requirements_per_module: Dict[str, List[str]] = Field(
         ..., description="module code → list of requirement strings"
     )
+    candidate_processes: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description=(
+            "module code → candidate processes captured from MoM Key Points Discussed bullets"
+        ),
+    )
     constraints: List[str] = Field(default_factory=list)
     open_questions: List[str] = Field(default_factory=list)
     conflicts_between_documents: List[DocumentConflict] = Field(
@@ -203,12 +209,36 @@ class ProcessStep(BaseModel):
     @field_validator("step_id")
     @classmethod
     def validate_step_id(cls, v: str) -> str:
-        if not re.match(r"^[A-Z]{2,3}-\d{2}-\d{2,3}$", v):
-            raise ValueError(
-                f"step_id '{v}' must match ^[A-Z]{{2,3}}-\\d{{2}}-\\d{{2,3}}$ "
-                f"(e.g. AP-02-01, GL-01-001)"
-            )
-        return v
+        # Strict format: MODULE-PROCESS-STEP e.g. AP-02-01, GL-01-001
+        if re.match(r"^[A-Z]{2,3}-\d{2}-\d{2,3}$", v):
+            return v
+
+        # Auto-correct common LLM hallucinations:
+        # "CM-CE-01" → extract module "CM", discard fake sub-code "CE", keep step
+        # "AP.04-01-01" → strip dots, normalize
+        # "AP03-01" → insert missing dash
+        cleaned = v.replace(".", "-").strip()
+
+        # Try to extract a valid MODULE-NN-NN(N) from anywhere in the string
+        m = re.search(r"([A-Z]{2,3})-(\d{2})-(\d{2,3})", cleaned)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+        # Handle "MODULE-XX-NN" where XX is a hallucinated alpha sub-code
+        # e.g. CM-CE-01 → CM-01-01 (treat as process 01, step 01)
+        m = re.match(r"^([A-Z]{2,3})-[A-Z]+-(\d{2,3})$", cleaned)
+        if m:
+            return f"{m.group(1)}-01-{m.group(2)}"
+
+        # Handle "MODULENN-NN" missing first dash e.g. AP03-01 → AP-03-01
+        m = re.match(r"^([A-Z]{2,3})(\d{2})-(\d{2,3})$", cleaned)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+        raise ValueError(
+            f"step_id '{v}' does not match expected format "
+            f"(e.g. AP-02-01, GL-01-001)"
+        )
 
     @field_validator("business_actor")
     @classmethod
@@ -221,12 +251,18 @@ class ProcessStep(BaseModel):
 class JournalEntry(BaseModel):
     """One accounting journal entry line."""
 
-    debit_account: str = Field(..., description="Account code or empty string")
-    credit_account: str = Field(..., description="Account code or empty string")
+    debit_account: str = Field(default="", description="Account code or empty string")
+    credit_account: str = Field(default="", description="Account code or empty string")
     amount_label: str = Field(
-        ..., description='e.g. "Invoice Amount", "Tax Amount"'
+        default="", description='e.g. "Invoice Amount", "Tax Amount"'
     )
-    label: str = Field(..., description="Account name or description")
+    label: str = Field(default="", description="Account name or description")
+
+    @field_validator("debit_account", "credit_account", "amount_label", "label", mode="before")
+    @classmethod
+    def coerce_none_to_empty(cls, v):
+        """LLMs occasionally return null instead of an empty string."""
+        return v if v is not None else ""
 
 
 class SectionContent(BaseModel):
@@ -245,7 +281,7 @@ class SectionContent(BaseModel):
         description="Real Oracle accounting entries; empty list = N/A",
     )
     key_requirements: List[str] = Field(
-        ..., min_length=1, description="3-8 bullet points"
+        default_factory=list, description="0-8 bullet points. Leave empty if none are specified."
     )
     missing_info: List[str] = Field(
         default_factory=list,

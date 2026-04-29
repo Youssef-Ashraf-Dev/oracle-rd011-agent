@@ -34,6 +34,8 @@ _EMPTY_CONFLICT_PHRASES = {
     "missing",
 }
 
+_MAX_CANDIDATE_PROCESSES_PER_MODULE = 12
+
 
 def _normalize_search_text(value: str) -> str:
     text = (value or "").lower()
@@ -132,6 +134,26 @@ def _sanitize_extraction_result(data: dict) -> dict:
         ]
         reqs_out[module] = _dedupe_preserve_order(safe_reqs)
     cleaned["requirements_per_module"] = reqs_out
+
+    # Normalize candidate process hints from Key Points Discussed bullets.
+    candidates = cleaned.get("candidate_processes", {}) or {}
+    candidates_out: dict[str, list[str]] = {}
+    for module, items in candidates.items():
+        cleaned_items = _dedupe_preserve_order([
+            str(item).strip() for item in (items or []) if str(item).strip()
+        ])
+        if not cleaned_items:
+            continue
+        if len(cleaned_items) > _MAX_CANDIDATE_PROCESSES_PER_MODULE:
+            logger.info(
+                "Trimming candidate_processes for %s from %d to %d",
+                module,
+                len(cleaned_items),
+                _MAX_CANDIDATE_PROCESSES_PER_MODULE,
+            )
+            cleaned_items = cleaned_items[:_MAX_CANDIDATE_PROCESSES_PER_MODULE]
+        candidates_out[module] = cleaned_items
+    cleaned["candidate_processes"] = candidates_out
 
     return cleaned
 

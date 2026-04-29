@@ -22,7 +22,6 @@ from pydantic import BaseModel, ValidationError
 from config import (
     MAX_RETRIES,
     CAPABILITY_MAP,
-    MODEL_POLICY_BLOCKLIST,
     LLM_TELEMETRY_ENABLED,
     LLM_TELEMETRY_PATH,
     FAIL_FAST_JSONDECODE_GENERATION,
@@ -303,16 +302,7 @@ def _model_id(provider: str, model_name: str) -> str:
     return f"{provider}/{model_name}"
 
 
-def _get_block_reason(
-    task_type: TaskType,
-    schema_name: str,
-    provider: str,
-    model_name: str,
-) -> str | None:
-    """Return policy reason if model is blocked for this task+schema, else None."""
-    task_rules = MODEL_POLICY_BLOCKLIST.get(task_type, {})
-    schema_rules = task_rules.get(schema_name, {})
-    return schema_rules.get(_model_id(provider, model_name))
+
 
 
 def call_with_retry(
@@ -364,33 +354,7 @@ def call_with_retry(
 
     schema_name = schema.__name__
 
-    # Policy filter: skip unsuitable models for this task+schema without spending retries.
-    blocked_models: list[tuple[str, str]] = []
-    filtered_cascade = []
-    for model_cfg in cascade:
-        provider = model_cfg["provider"]
-        model_name = model_cfg["model"]
-        reason = _get_block_reason(task_type, schema_name, provider, model_name)
-        if reason:
-            blocked_models.append((_model_id(provider, model_name), reason))
-            logger.warning(
-                "Policy skip for %s on %s/%s: %s",
-                schema_name,
-                task_type.value,
-                _model_id(provider, model_name),
-                reason,
-            )
-            continue
-        filtered_cascade.append(model_cfg)
 
-    if not filtered_cascade:
-        blocked_text = "; ".join(f"{m} ({r})" for m, r in blocked_models) or "none"
-        raise RuntimeError(
-            f"All models blocked by policy for {task_type.value}/{schema_name}. "
-            f"Blocked: {blocked_text}"
-        )
-
-    cascade = filtered_cascade
     tried = []
 
     for cascade_idx, model_cfg in enumerate(cascade, start=1):
@@ -436,6 +400,30 @@ def call_with_retry(
 
         except Exception as exc:
             exc_str = str(exc).lower()
+
+            is_429 = (
+                "429" in exc_str
+                or "too many requests" in exc_str
+                or "rate_limit" in exc_str
+                or "resource_exhausted" in exc_str
+            )
+            if is_429:
+                logger.warning(
+                    "Rate limit (429) for %s/%s on %s",
+                    provider,
+                    model_name,
+                    schema_name,
+                )
+                _emit_telemetry(
+                    "rate_limited",
+                    task_type=task_type.value,
+                    schema=schema_name,
+                    provider=provider,
+                    model=model_name,
+                    cascade_index=cascade_idx,
+                    error_type=type(exc).__name__,
+                    error_text=str(exc)[:220],
+                )
 
             # Rate-limit, request-size, or model-availability errors — skip immediately.
             is_skip = (

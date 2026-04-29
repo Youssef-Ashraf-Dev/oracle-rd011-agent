@@ -52,7 +52,7 @@ def update_plan_node(state: dict) -> dict:
             pass
 
     current_plan = DocumentPlan.model_validate(plan_data)
-    prompt = build_update_prompt(current_plan, feedback, conflicts=conflicts)
+    prompt = build_update_prompt(current_plan, feedback, conflicts=conflicts, extraction=extraction)
 
     try:
         updated_plan = call_with_retry(TaskType.REASONING, prompt, DocumentPlan)

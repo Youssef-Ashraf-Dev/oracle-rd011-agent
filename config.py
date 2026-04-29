@@ -23,8 +23,8 @@ class TaskType(Enum):
 
 CAPABILITY_MAP = {
     TaskType.LARGE_CONTEXT: {
-        "provider": "google",
-        "model": "gemini-3.1-flash-lite-preview",
+        "provider": "openrouter",
+        "model": "google/gemini-2.5-flash-lite",
         "fallback_chain": [
             {"provider": "groq", "model": "llama-3.3-70b-versatile"},
         ],
@@ -32,108 +32,31 @@ CAPABILITY_MAP = {
         # Single model (no cascade) — runs once per document.
     },
     TaskType.REASONING: {
-        "provider":       "groq",
-        "model":          "llama-3.3-70b-versatile",
+        "provider":       "openrouter",
+        "model":          "meta-llama/llama-3.3-70b-instruct",
         "fallback_chain": [
-            {"provider": "mistral", "model": "mistral-medium-latest"},
-            {"provider": "google", "model": "gemini-3.1-flash-lite-preview"},
+            {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+            {"provider": "openrouter", "model": "deepseek/deepseek-chat"},
         ],
-        # For planning and cross-checking facts.
+        # For planning and cross-checking facts. Paid tier for stable reasoning.
         # Waterfall: primary → fallback_chain on (429: Rate Limit Exceeded) or (400: Bad Request).
     },
     TaskType.GENERATION: {
         "provider":       "groq",
-        "model":          "meta-llama/llama-4-scout-17b-16e-instruct",
+        "model":          "llama-3.3-70b-versatile",
         "fallback_chain": [
-            {"provider": "google", "model": "gemini-3.1-flash-lite-preview"},
+            {"provider": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct:free"},
+            {"provider": "openrouter", "model": "google/gemini-2.5-flash-lite"},
         ],
-        # High rate limit for writing 15+ sections quickly.
+        # High rate limit for writing 15+ sections quickly. Free tier via Groq.
         # Waterfall: primary → fallback_chain on (429: Rate Limit Exceeded) or (400: Bad Request).
     },
 }
 
 
-def _load_capability_overrides() -> dict:
-    """
-    Load optional task routing overrides from JSON.
-
-    Expected format:
-    {
-      "reasoning": {
-        "provider": "mistral",
-        "model": "mistral-medium-latest",
-        "fallback_chain": [{"provider": "google", "model": "gemini-3.1-flash-lite-preview"}]
-      },
-      "generation": { ... }
-    }
-    """
-    override_path = os.getenv("CAPABILITY_OVERRIDES_PATH", "").strip()
-    if not override_path:
-        return {}
-
-    path = Path(override_path)
-    if not path.exists():
-        return {}
-
-    try:
-        import json
-
-        with path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except Exception:
-        return {}
-
-    if not isinstance(raw, dict):
-        return {}
-
-    task_key_map = {
-        TaskType.LARGE_CONTEXT.value: TaskType.LARGE_CONTEXT,
-        TaskType.REASONING.value: TaskType.REASONING,
-        TaskType.GENERATION.value: TaskType.GENERATION,
-    }
-
-    parsed: dict[TaskType, dict] = {}
-    for key, value in raw.items():
-        task = task_key_map.get(str(key).strip().lower())
-        if not task or not isinstance(value, dict):
-            continue
-        provider = value.get("provider")
-        model = value.get("model")
-        fallback_chain = value.get("fallback_chain", [])
-        if not provider or not model or not isinstance(fallback_chain, list):
-            continue
-        parsed[task] = {
-            "provider": provider,
-            "model": model,
-            "fallback_chain": fallback_chain,
-        }
-
-    return parsed
 
 
-_CAPABILITY_OVERRIDES = _load_capability_overrides()
-if _CAPABILITY_OVERRIDES:
-    CAPABILITY_MAP.update(_CAPABILITY_OVERRIDES)
 
-# Optional model policy rules keyed by TaskType -> schema -> provider/model.
-# Example:
-# MODEL_POLICY_BLOCKLIST = {
-#     TaskType.REASONING: {
-#         "DocumentPlan": {"groq/llama-3.3-70b-versatile": "high JSON drift"}
-#     }
-# }
-MODEL_POLICY_BLOCKLIST = {
-    TaskType.REASONING: {
-        "DocumentPlan": {
-            "groq/llama-3.3-70b-versatile": "payload-sensitive for large planning prompts",
-            "mistral/mistral-medium-latest": "frequent timeouts on large planning prompts",
-        },
-        "PlanValidationResult": {
-            "groq/llama-3.3-70b-versatile": "payload-sensitive for large validation prompts",
-            "mistral/mistral-medium-latest": "frequent timeouts on large validation prompts",
-        },
-    }
-}
 
 # ── API keys ──────────────────────────────────────────────────────────────
 
@@ -178,13 +101,7 @@ GENERATION_THROTTLE_ON_FAILURE_ONLY = _env_flag("GENERATION_THROTTLE_ON_FAILURE_
 # next fallback model after the first JSONDecodeError.
 FAIL_FAST_JSONDECODE_GENERATION = _env_flag("FAIL_FAST_JSONDECODE_GENERATION", "true")
 
-# Generate multiple process sections in parallel to reduce wall time.
-# Keep this small (2–3) to avoid 429 rate limits on smaller provider tiers.
-SECTION_GENERATION_CONCURRENCY = int(os.getenv("SECTION_GENERATION_CONCURRENCY", "2"))
-if SECTION_GENERATION_CONCURRENCY < 1:
-    SECTION_GENERATION_CONCURRENCY = 1
-if SECTION_GENERATION_CONCURRENCY > 8:
-    SECTION_GENERATION_CONCURRENCY = 8
+
 
 # Retry/route telemetry (JSONL)
 LLM_TELEMETRY_ENABLED = _env_flag("LLM_TELEMETRY_ENABLED", "true")

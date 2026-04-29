@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Sequence
 
@@ -150,14 +151,23 @@ def _cache_key(
     return (query, k, strategy, filt, allow)
 
 
-def _get_vector_db(embedding_func):
-    from langchain_chroma import Chroma
+_VECTOR_DB_LOCK = threading.Lock()
+_VECTOR_DB_CACHE = None
 
-    return Chroma(
-        collection_name=COLLECTION_NAME,
-        persist_directory=str(CHROMA_DB_PATH),
-        embedding_function=embedding_func,
-    )
+def _get_vector_db(embedding_func):
+    global _VECTOR_DB_CACHE
+    with _VECTOR_DB_LOCK:
+        if _VECTOR_DB_CACHE is not None:
+            return _VECTOR_DB_CACHE
+
+        from langchain_chroma import Chroma
+
+        _VECTOR_DB_CACHE = Chroma(
+            collection_name=COLLECTION_NAME,
+            persist_directory=str(CHROMA_DB_PATH),
+            embedding_function=embedding_func,
+        )
+        return _VECTOR_DB_CACHE
 
 
 def retrieve_candidates(
@@ -203,7 +213,8 @@ def retrieve_candidates(
 
     try:
         embedding_func = get_embedding_function()
-    except Exception:
+    except Exception as exc:
+        logger.error("Failed to load embedding func: %s", exc)
         _trace_retrieval_call(
             call_id=call_id,
             query=query,

@@ -132,6 +132,15 @@ Note: certain standard processes (Month End Closing, etc.) are automatically \
 appended by the system after planning — you do not need to include them.
 If a process appears in the MoM, its details override any implicit standard.
 
+═══════════════════════════════════════════════════
+RULE 7 — CANDIDATE PROCESS HINTS
+═══════════════════════════════════════════════════
+
+The extraction results may include candidate_processes derived from MoM
+"Key Points Discussed" bullet lists. Treat these as weak hints only.
+Include a candidate process ONLY when it aligns with requirements_per_module
+or other explicit MoM evidence. Otherwise, omit it or capture missing_info.
+
 Return ONLY valid JSON — no markdown fences, no commentary outside the JSON.
 JSON MUST use strict syntax (double quotes, no trailing commas, no comments).
 

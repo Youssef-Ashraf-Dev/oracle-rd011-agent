@@ -1,0 +1,44 @@
+===================================================
+      RD.011 GENERATOR - OPERATING INSTRUCTIONS
+===================================================
+
+Welcome to the RD.011 Future Process Model Generator! 
+
+This tool is entirely self-contained. You do not need to install Python, Docker, or any other technical software to use it. 
+
+--- HOW TO START THE APPLICATION ---
+
+1. Extract this entire folder to your Desktop (or any location on your PC). 
+   Important: Do not try to run the application from inside the ZIP file without extracting it first!
+
+2. Open the extracted folder and double-click the file named:
+   "Run_RD011.bat" (It may just show up as "Run_RD011" depending on your Windows settings).
+
+3. A black terminal window will open. Leave this window running! It acts as the engine for the application.
+
+4. A few seconds later, your default web browser will automatically open the RD.011 Generator interface.
+
+--- HOW TO USE THE GENERATOR ---
+
+1. In the left sidebar of the web browser, locate the "Settings" menu.
+2. Paste your OpenRouter API Key into the designated field.
+3. Upload your documents in the main window.
+4. Click the generate button to begin creating your process models!
+
+--- HOW TO CLOSE THE APPLICATION ---
+
+When you are finished working for the day:
+1. Close your web browser tab.
+2. Close the black terminal window. 
+
+This safely turns off the application until you need to use it again.
+
+--- HOW TO MODIFY GENERATED DIAGRAMS ---
+
+The generated Word document contains pictures of the process flow diagrams. If you need to make a small change to a diagram after the document is generated:
+1. Scroll to the very bottom of the Word document to the "Appendix: Graphviz DOT Diagram Source Code".
+2. Copy the code block for the specific process diagram you want to change.
+3. Open a web browser and go to: https://dreampuf.github.io/GraphvizOnline/
+4. Paste the code. The diagram will appear on the screen!
+5. You can safely change the plain text inside the code (like changing a role name or step description). The picture will update automatically.
+6. Click 'Download PNG', save the new picture, and paste it back into your Word document over the old one.

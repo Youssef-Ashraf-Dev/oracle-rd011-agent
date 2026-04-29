@@ -608,10 +608,14 @@ class DocumentBuilder:
         self._add_heading("Appendix: Graphviz DOT Diagram Source Code", level=1)
         self._add_paragraph(
             "This appendix contains the raw Graphviz DOT source code for all "
-            "process flow diagrams. Consultants can copy this code into any "
-            "Graphviz-compatible editor (e.g., Edotor, dreampuf/GraphvizOnline) "
-            "to adjust the diagrams manually."
+            "process flow diagrams. If a diagram requires adjustments (e.g., adding a step or changing a role), "
+            "you do not need to know how to code! Just follow these simple steps:"
         )
+        self._add_paragraph("1. Copy the block of code below for the diagram you want to change.")
+        self._add_paragraph("2. Go to an online Graphviz editor like: https://dreampuf.github.io/GraphvizOnline/")
+        self._add_paragraph("3. Paste the code into the left side of the screen. You will see the diagram appear on the right.")
+        self._add_paragraph("4. Modify the plain text inside the code to change step names or business actors. The diagram will update live.")
+        self._add_paragraph("5. Download the updated diagram as a PNG image and paste it directly into this Word document to replace the old one!")
 
         for section_key, section_data in generated_sections.items():
             if isinstance(section_data, dict):

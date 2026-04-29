@@ -748,64 +748,29 @@ def _find_section_and_process(
     return None, None
 
 
-def generate_section_node(state: dict) -> dict:
-    """
-    Generate content for the current process in the section queue.
-
-    On success: stores the SectionContent and increments the index.
-    On failure: appends to failed_sections and increments the index.
-    """
-    idx = state.get("current_section_index", 0)
-    section_queue = state.get("section_queue", [])
-    plan_data = state.get("document_plan")
-    extraction_data = state.get("extraction_result", {})
-    generated_sections = dict(state.get("generated_sections", {}))
-    failed_sections = list(state.get("failed_sections", []))
-    errors = list(state.get("errors", []))
-    section_failed = False
-
-    if idx >= len(section_queue):
-        logger.info("All sections generated")
-        return {"last_completed_node": "generate_section"}
-
-    section_key = section_queue[idx]
-    logger.info("Generating section %d/%d: %s", idx + 1, len(section_queue), section_key)
-
-    if not plan_data:
-        errors.append(f"No document plan for section {section_key}")
-        return {
-            "current_section_index": idx + 1,
-            "errors": errors,
-            "last_completed_node": "generate_section",
-        }
-
-    plan = DocumentPlan.model_validate(plan_data)
+def _generate_section_for_key(
+    section_key: str,
+    plan: DocumentPlan,
+    extraction: ExtractionResult | None,
+) -> tuple[str, dict | None, str | None]:
+    """Generate and validate one SectionContent payload for a section key."""
     section_plan, process = _find_section_and_process(plan, section_key)
-
     if not section_plan or not process:
         error_msg = f"Could not find section/process for key: {section_key}"
         logger.error(error_msg)
-        errors.append(error_msg)
-        failed_sections.append(section_key)
-        return {
-            "current_section_index": idx + 1,
-            "generated_sections": generated_sections,
-            "failed_sections": failed_sections,
-            "errors": errors,
-            "last_completed_node": "generate_section",
-        }
+        return section_key, None, error_msg
 
-    # Build requirements text
-    extraction = ExtractionResult.model_validate(extraction_data) if extraction_data else None
     requirements_list = []
     if extraction:
         requirements_list = extraction.requirements_per_module.get(
             section_plan.section_id, []
         )
     requirements_list = _select_relevant_requirements(process, requirements_list)
-    requirements_text = "\n".join(f"- {r}" for r in requirements_list) or "No specific requirements captured."
+    requirements_text = (
+        "\n".join(f"- {r}" for r in requirements_list)
+        or "No specific requirements captured."
+    )
 
-    # RAG context (optional): exemplars for style + step granularity.
     rag_style_context = ""
     rag_step_context = ""
     if RAG_ENABLED:
@@ -813,9 +778,10 @@ def generate_section_node(state: dict) -> dict:
             from rag.retriever import build_exemplar_blocks
 
             module_code = str(section_plan.section_id or "").strip().upper()
-            # Use semantic process identity (name/description) instead of ordinal process_id,
-            # since process numbering varies across projects and example sets.
-            query = f"{module_code} {process.process_name} {process.process_description} process narrative steps"
+            query = (
+                f"{module_code} {process.process_name} {process.process_description} "
+                "process narrative steps"
+            )
             rag_style_context, rag_step_context = build_exemplar_blocks(
                 query=query,
                 needed_types=["process_narrative", "process_steps"],
@@ -833,7 +799,6 @@ def generate_section_node(state: dict) -> dict:
     else:
         logger.info("RAG disabled - generating without reference examples")
 
-    # Build prompt and call LLM
     prompt = build_generation_prompt(
         section_plan=section_plan,
         process=process,
@@ -875,8 +840,12 @@ def generate_section_node(state: dict) -> dict:
                 error=str(exc),
             )
 
+    error_msg = None
+    result = None
+    section_failed = False
+
     if content is not None:
-        generated_sections[section_key] = content.model_dump()
+        result = content.model_dump()
         logger.info(
             "Generated %s: %d steps, %d journal entries",
             section_key,
@@ -887,13 +856,64 @@ def generate_section_node(state: dict) -> dict:
         section_failed = True
         error_msg = f"Generation failed for {section_key}: {last_exc}"
         logger.error(error_msg)
-        errors.append(error_msg)
-        failed_sections.append(section_key)
 
-    # Optional throttling to control burstiness on free tiers.
     if GENERATION_THROTTLE_SECONDS > 0:
         if not GENERATION_THROTTLE_ON_FAILURE_ONLY or section_failed:
             time.sleep(GENERATION_THROTTLE_SECONDS)
+
+    return section_key, result, error_msg
+
+
+def generate_section_node(state: dict) -> dict:
+    """
+    Generate content for the next process in the section queue.
+
+    On success: stores the SectionContent and increments the index by 1.
+    On failure: appends to failed_sections and increments the index by 1.
+    """
+    idx = state.get("current_section_index", 0)
+    section_queue = state.get("section_queue", [])
+    plan_data = state.get("document_plan")
+    extraction_data = state.get("extraction_result", {})
+    generated_sections = dict(state.get("generated_sections", {}))
+    failed_sections = list(state.get("failed_sections", []))
+    errors = list(state.get("errors", []))
+
+    if idx >= len(section_queue):
+        logger.info("All sections generated")
+        return {"last_completed_node": "generate_section"}
+
+    section_key = section_queue[idx]
+
+    if not plan_data:
+        errors.append(f"No document plan for section {section_key}")
+        return {
+            "current_section_index": idx + 1,
+            "errors": errors,
+            "last_completed_node": "generate_section",
+        }
+
+    plan = DocumentPlan.model_validate(plan_data)
+    extraction = ExtractionResult.model_validate(extraction_data) if extraction_data else None
+
+    logger.info(
+        "Generating section %d/%d: %s",
+        idx + 1,
+        len(section_queue),
+        section_key,
+    )
+
+    key, content, error_msg = _generate_section_for_key(
+        section_key,
+        plan,
+        extraction,
+    )
+    if content is not None:
+        generated_sections[key] = content
+    else:
+        failed_sections.append(section_key)
+        if error_msg:
+            errors.append(error_msg)
 
     return {
         "current_section_index": idx + 1,
