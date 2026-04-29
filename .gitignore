@@ -22,11 +22,12 @@ checkpoints/
 # Generated outputs (Word documents and diagrams)
 outputs/
 
+# input sample files
+samples/
 
-# RAG knowledge base (raw examples and vector store data)
+# RAG knowledge base (raw examples)
 rag/data/
-knowledge_base/raw_examples/
-knowledge_base/chroma_db/
+rag/examples/
 
 # Test cache
 .pytest_cache/
@@ -59,3 +60,18 @@ Guide/
 *.md
 # exclude readme.md
 !README.md
+
+# Dev-only: tests, tools, scripts (not needed by consultant)
+tests/
+tools/
+scripts/
+pytest.ini
+
+# Dev-only: scratch and research files
+scratch_prices.py
+prices.txt
+wider_prices.txt
+environment_delivery.yml
+
+# Dev-only: old CLI entrypoint (replaced by app.py + Start_RD011.bat)
+main.py

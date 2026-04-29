@@ -119,8 +119,8 @@ def format_issue_report(report):
 
 # 1. Sidebar: API Keys & Settings
 with st.sidebar:
-    if os.path.exists("assets/RIS-01.jpg"):
-        st.image("assets/RIS-01.jpg", use_container_width=True)
+    if os.path.exists("assets/logo_square.png"):
+        st.image("assets/logo_square.png", use_container_width=True)
     st.title("⚙️ Settings")
     
     st.subheader("API Keys")
@@ -150,10 +150,11 @@ with st.sidebar:
             st.rerun()
 
 # 2. Main Content
+if os.path.exists("assets/logo_wide.png"):
+    st.image("assets/logo_wide.png", use_container_width=True)
+st.title("📄 RD.011 Future Process Model Generator")
+
 if st.session_state.run_status == "idle":
-    if os.path.exists("assets/Oracle-Partner.png"):
-        st.image("assets/Oracle-Partner.png", use_container_width=True)
-    st.title("📄 RD.011 Future Process Model Generator")
     action = st.radio("Choose Action:", ["Start New Generation", "Resume Existing Session"], horizontal=True)
     st.markdown("---")
     
