@@ -23,34 +23,35 @@ class TaskType(Enum):
 
 CAPABILITY_MAP = {
     TaskType.LARGE_CONTEXT: {
-        "provider": "openrouter",
-        "model": "google/gemini-2.5-flash-lite",
+        "provider": "google",
+        "model": "gemini-3.1-flash-lite-preview",
         "fallback_chain": [
-            {"provider": "groq", "model": "llama-3.3-70b-versatile"},
+            {"provider": "openrouter", "model": "google/gemini-2.5-flash-lite"},
         ],
         # Leverages the 1M context window for the initial document ingestion.
-        # Single model (no cascade) — runs once per document.
+        # Direct Google API has no output token cap and is free.
     },
     TaskType.REASONING: {
-        "provider":       "openrouter",
-        "model":          "meta-llama/llama-3.3-70b-instruct",
+        "provider":       "groq",
+        "model":          "llama-3.3-70b-versatile",
         "fallback_chain": [
-            {"provider": "groq", "model": "llama-3.3-70b-versatile"},
-            {"provider": "openrouter", "model": "deepseek/deepseek-chat"},
+            {"provider": "google", "model": "gemini-3.1-flash-lite-preview"},
+            {"provider": "openrouter", "model": "google/gemini-2.5-flash-lite"},
         ],
-        # For planning and cross-checking facts. Paid tier for stable reasoning.
-        # Waterfall: primary → fallback_chain on (429: Rate Limit Exceeded) or (400: Bad Request).
+        # Planning prompt is ~2500 tokens — well within Groq's 32K limit.
+        # Groq is sub-second; Gemini lite acts as a fast, free fallback.
     },
     TaskType.GENERATION: {
         "provider":       "groq",
         "model":          "llama-3.3-70b-versatile",
         "fallback_chain": [
-            {"provider": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct:free"},
+            {"provider": "google", "model": "gemini-3.1-flash-lite-preview"},
             {"provider": "openrouter", "model": "google/gemini-2.5-flash-lite"},
         ],
-        # High rate limit for writing 15+ sections quickly. Free tier via Groq.
-        # Waterfall: primary → fallback_chain on (429: Rate Limit Exceeded) or (400: Bad Request).
+        # High rate limit for writing sections quickly. Free tier via Groq.
+        # Fallbacks to Gemini Lite which has proven highly reliable in telemetry.
     },
+
 }
 
 

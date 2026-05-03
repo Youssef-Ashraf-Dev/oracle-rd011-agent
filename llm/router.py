@@ -58,25 +58,31 @@ def _build_groq_client(model: str):
 
 
 
-def _build_openrouter_client(model: str):
+def _build_openrouter_client(model: str, task_type=None):
     """Build a ChatOpenAI client pointing at OpenRouter API."""
     from langchain_openai import ChatOpenAI
 
     if not OPENROUTER_API_KEY:
         raise ValueError("OPENROUTER_API_KEY is not set in environment.")
+
+    # LARGE_CONTEXT extraction outputs ~7K tokens of JSON — use a higher cap.
+    # Confirmed from telemetry: truncation occurs at char ~27,000 (~6,750 tokens).
+    # Other tasks (planning ~500t, generation ~2K t) are fine with 8,192.
+    max_tokens = 16_000 if task_type == TaskType.LARGE_CONTEXT else 8_192
+
     return ChatOpenAI(
         model=model,
         openai_api_key=OPENROUTER_API_KEY,
         openai_api_base="https://openrouter.ai/api/v1",
         temperature=0.2,
-        max_tokens=8192,
+        max_tokens=max_tokens,
     )
 
 
 _BUILDERS = {
     "google": lambda cfg, task_type=None: _build_google_client(cfg["model"], task_type),
     "groq": lambda cfg, task_type=None: _build_groq_client(cfg["model"]),
-    "openrouter": lambda cfg, task_type=None: _build_openrouter_client(cfg["model"]),
+    "openrouter": lambda cfg, task_type=None: _build_openrouter_client(cfg["model"], task_type),
 }
 
 

@@ -430,6 +430,7 @@ def call_with_retry(
                 "429" in exc_str
                 or "400" in exc_str
                 or "413" in exc_str
+                or "503" in exc_str
                 or "rate_limit" in exc_str
                 or "too many requests" in exc_str
                 or "payload too large" in exc_str
@@ -439,6 +440,8 @@ def call_with_retry(
                 or "resource_exhausted" in exc_str
                 or "decommissioned" in exc_str
                 or "model_not_found" in exc_str
+                or "unavailable" in exc_str
+                or "overloaded" in exc_str
             )
 
             if is_skip and cascade_idx < len(cascade):

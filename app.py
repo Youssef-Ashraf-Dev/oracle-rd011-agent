@@ -1,4 +1,6 @@
 import streamlit as st
+import nest_asyncio
+nest_asyncio.apply()  # Allow nested event loops (fixes asyncio/Streamlit threading conflict)
 import os
 import uuid
 import logging
@@ -8,6 +10,24 @@ import traceback
 
 # Streamlit Page Config
 st.set_page_config(page_title="RD.011 Generator", page_icon="📄", layout="wide")
+
+# --- CUSTOM CSS TO HIDE FULLSCREEN BUTTON ---
+st.markdown(
+    """
+    <style>
+    /* This targets the button that appears on hover over images */
+    button[title="View fullscreen"] {
+        display: none;
+    }
+    /* Hide navigator buttons for images/pdfs */
+    button[title="Previous page"],
+    button[title="Next page"] {
+        display: none;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # Initialize logging if not already done
 if "logger_initialized" not in st.session_state:
@@ -47,6 +67,44 @@ if "current_result" not in st.session_state:
     st.session_state.current_result = None
 if "error_message" not in st.session_state:
     st.session_state.error_message = None
+
+# --- Session Recovery Detection ---
+# Runs ONCE per browser session (tracked by _recovery_checked flag).
+# Only sets a flag — the UI below handles the user's choice.
+if "_recovery_checked" not in st.session_state:
+    st.session_state._recovery_checked = False
+if "recoverable_thread" not in st.session_state:
+    st.session_state.recoverable_thread = None
+if "_recoverable_status" not in st.session_state:
+    st.session_state._recoverable_status = None
+
+if not st.session_state._recovery_checked and st.session_state.thread_id is None:
+    st.session_state._recovery_checked = True  # never run again this browser session
+    try:
+        import sqlite3 as _sqlite3
+        _db_path = config.CHECKPOINT_DB_PATH
+        if os.path.exists(_db_path):
+            _conn = _sqlite3.connect(_db_path)
+            _cursor = _conn.execute(
+                "SELECT thread_id FROM checkpoints ORDER BY rowid DESC LIMIT 1"
+            )
+            _row = _cursor.fetchone()
+            _conn.close()
+            if _row:
+                _last_thread = _row[0]
+                _graph = get_graph()
+                _snapshot = _graph.get_state({"configurable": {"thread_id": _last_thread}})
+                if _snapshot and _snapshot.values:
+                    if any(t.interrupts for t in (_snapshot.tasks or [])):
+                        st.session_state.recoverable_thread = _last_thread
+                        st.session_state._recoverable_status = "waiting_approval"
+                    elif _snapshot.values.get("output_path"):
+                        st.session_state.recoverable_thread = _last_thread
+                        st.session_state._recoverable_status = "completed"
+    except Exception as _recovery_err:
+        logger.debug("Session recovery detection skipped: %s", _recovery_err)
+
+
 
 def save_uploaded_files(uploaded_files, prefix=""):
     paths = []
@@ -119,9 +177,9 @@ def format_issue_report(report):
 
 # 1. Sidebar: API Keys & Settings
 with st.sidebar:
-    if os.path.exists("assets/logo_square.png"):
-        st.image("assets/logo_square.png", use_container_width=True)
-    st.title("⚙️ Settings")
+    if os.path.exists("assets/logo_square.jpg"):
+        st.image("assets/logo_square.jpg", width="stretch")
+    st.title("⚙️ Configuration")
     
     st.subheader("API Keys")
     openrouter_key = st.text_input("OpenRouter API Key", value=os.environ.get("OPENROUTER_API_KEY", ""), type="password")
@@ -147,24 +205,53 @@ with st.sidebar:
             st.session_state.run_status = "idle"
             st.session_state.current_result = None
             st.session_state.error_message = None
+            # Reset recovery detection so next run can detect a fresh session
+            st.session_state._recovery_checked = False
+            st.session_state.recoverable_thread = None
+            st.session_state._recoverable_status = None
+            # Reset feedback state for a clean approval UI on the next run
+            st.session_state.feedback_key_counter = 0
+            st.session_state._feedback_has_content = False
             st.rerun()
+
 
 # 2. Main Content
 if os.path.exists("assets/logo_wide.png"):
-    st.image("assets/logo_wide.png", use_container_width=True)
+    st.image("assets/logo_wide.png", width="stretch")
 st.title("📄 RD.011 Future Process Model Generator")
 
 if st.session_state.run_status == "idle":
     action = st.radio("Choose Action:", ["Start New Generation", "Resume Existing Session"], horizontal=True)
     st.markdown("---")
     
+    # Notify about a recoverable session — Resume button only.
+    # User can ignore this and upload a new document below.
+    if st.session_state.recoverable_thread:
+        _rec_status = st.session_state.get("_recoverable_status", "interrupted")
+        _status_label = "waiting for your approval" if _rec_status == "waiting_approval" else "completed (document ready)"
+        st.info(
+            f"📌 Previous session found (Thread: **{st.session_state.recoverable_thread}**, "
+            f"Status: {_status_label}). Click Resume to continue it, or upload new files below to start fresh."
+        )
+        if st.button("▶ Resume Previous Session", type="primary"):
+            _thread = st.session_state.recoverable_thread
+            _graph = get_graph()
+            _snapshot = _graph.get_state({"configurable": {"thread_id": _thread}})
+            st.session_state.thread_id = _thread
+            st.session_state.current_result = _snapshot.values
+            st.session_state.run_status = st.session_state._recoverable_status
+            st.session_state.recoverable_thread = None
+            logger.info("User resumed session: thread_id=%s", _thread)
+            st.rerun()
+        st.markdown("---")
+    
     if action == "Start New Generation":
         st.markdown("Upload your project documents below to generate the RD.011 document.")
         
         with st.form("upload_form"):
             mom_files = st.file_uploader("Upload Minutes of Meeting (MoM) .docx (Mandatory)", type=["docx"], accept_multiple_files=True)
-            scope_file = st.file_uploader("Upload Scope of Solution .docx (Optional)", type=["docx"])
             q_files = st.file_uploader("Upload Questionnaires .xlsx (Optional)", type=["xlsx"], accept_multiple_files=True)
+            scope_file = st.file_uploader("Upload Scope of Solution .docx (Optional)", type=["docx"])
             
             submitted = st.form_submit_button("Generate RD.011 Document", type="primary")
             
@@ -174,39 +261,57 @@ if st.session_state.run_status == "idle":
                 elif not os.environ.get("GROQ_API_KEY") and not os.environ.get("GOOGLE_API_KEY") and not os.environ.get("OPENROUTER_API_KEY"):
                     st.error("Please provide API keys in the sidebar.")
                 else:
-                    with st.spinner("Saving files..."):
-                        mom_paths = save_uploaded_files(mom_files, "mom_")
-                        scope_path = save_uploaded_files([scope_file] if scope_file else [], "scope_")
-                        q_paths = save_uploaded_files(q_files, "q_")
-                        
-                        input_files = mom_paths + scope_path + q_paths
-                        
-                        st.session_state.thread_id = str(uuid.uuid4())[:8]
-                        st.session_state.run_status = "running"
-                        
-                        initial_state = {
-                            "thread_id": st.session_state.thread_id,
-                            "input_files": input_files,
-                            "raw_texts": {},
-                            "extraction_result": None,
-                            "document_plan": None,
-                            "issue_report": None,
-                            "consultant_approved": False,
-                            "consultant_feedback": "",
-                            "approval_iteration": 0,
-                            "approval_maxed": False,
-                            "intro_content": None,
-                            "section_queue": [],
-                            "current_section_index": 0,
-                            "generated_sections": {},
-                            "failed_sections": [],
-                            "diagram_registry": {},
-                            "output_path": None,
-                            "errors": [],
-                            "last_completed_node": "",
-                        }
-                        st.session_state.current_input = initial_state
-                        st.rerun()
+                    # Check for duplicate filenames across all uploaders
+                    all_files = list(mom_files or [])
+                    if scope_file:
+                        all_files.append(scope_file)
+                    all_files.extend(q_files or [])
+                    
+                    seen_names = {}
+                    duplicates = []
+                    for f in all_files:
+                        if f.name in seen_names:
+                            if f.name not in duplicates:
+                                duplicates.append(f.name)
+                        else:
+                            seen_names[f.name] = True
+                    
+                    if duplicates:
+                        st.error(f"⚠️ Duplicate files detected: **{', '.join(duplicates)}**. Please remove duplicates before generating.")
+                    else:
+                        with st.spinner("Saving files..."):
+                            mom_paths = save_uploaded_files(mom_files, "mom_")
+                            scope_path = save_uploaded_files([scope_file] if scope_file else [], "scope_")
+                            q_paths = save_uploaded_files(q_files, "q_")
+                            
+                            input_files = mom_paths + scope_path + q_paths
+                            
+                            st.session_state.thread_id = str(uuid.uuid4())[:8]
+                            st.session_state.run_status = "running"
+                            
+                            initial_state = {
+                                "thread_id": st.session_state.thread_id,
+                                "input_files": input_files,
+                                "raw_texts": {},
+                                "extraction_result": None,
+                                "document_plan": None,
+                                "issue_report": None,
+                                "consultant_approved": False,
+                                "consultant_feedback": "",
+                                "approval_iteration": 0,
+                                "approval_maxed": False,
+                                "intro_content": None,
+                                "section_queue": [],
+                                "current_section_index": 0,
+                                "generated_sections": {},
+                                "failed_sections": [],
+                                "diagram_registry": {},
+                                "output_path": None,
+                                "errors": [],
+                                "last_completed_node": "",
+                            }
+                            st.session_state.current_input = initial_state
+                            st.rerun()
 
     else:
         # Resume Session Logic
@@ -299,33 +404,46 @@ elif st.session_state.run_status == "waiting_approval":
     st.markdown("---")
     st.subheader("Provide Feedback or Approve")
     
-    feedback = st.text_area(
-        "Feedback (leave blank if approving):", 
-        key="feedback_box",
-        help="If the plan needs changes, write instructions here."
-    )
+    # Key counter forces widget recreation (clears the box cleanly after submit)
+    if "feedback_key_counter" not in st.session_state:
+        st.session_state.feedback_key_counter = 0
     
-    has_feedback = bool(feedback.strip())
+    _feedback_key = f"feedback_box_{st.session_state.feedback_key_counter}"
+
+    feedback = st.text_area(
+        "Feedback (leave blank if approving):",
+        key=_feedback_key,
+        help="If the plan needs changes, write your revision instructions here.",
+    )
     
     col1, col2 = st.columns(2)
     with col1:
-        approve_btn = st.button("✅ Approve Plan", type="primary", disabled=has_feedback)
+        approve_btn = st.button("✅ Approve Plan", type="primary")
     with col2:
-        revise_btn = st.button("🔄 Submit Feedback for Revision", disabled=not has_feedback)
+        revise_btn = st.button("🔄 Submit Feedback for Revision")
         
     if approve_btn:
-        st.session_state.run_status = "running"
-        from langgraph.types import Command
-        st.session_state.current_input = Command(resume="APPROVE")
-        st.session_state.feedback_box = ""
-        st.rerun()
+        _feedback_text = st.session_state.get(_feedback_key, "").strip()
+        if _feedback_text:
+            st.warning("⚠️ You have written feedback. Clear the feedback box before approving, or click 'Submit Feedback for Revision' instead.")
+        else:
+            from langgraph.types import Command
+            st.session_state.current_input = Command(resume="APPROVE")
+            st.session_state.run_status = "running"
+            st.session_state.feedback_key_counter += 1
+            st.rerun()
         
     elif revise_btn:
-        st.session_state.run_status = "running"
-        from langgraph.types import Command
-        st.session_state.current_input = Command(resume=feedback)
-        st.session_state.feedback_box = ""
-        st.rerun()
+        _feedback_text = st.session_state.get(_feedback_key, "").strip()
+        if not _feedback_text:
+            st.warning("⚠️ Please write your feedback in the text box before submitting.")
+        else:
+            from langgraph.types import Command
+            st.session_state.current_input = Command(resume=_feedback_text)
+            st.session_state.run_status = "running"
+            st.session_state.feedback_key_counter += 1
+            st.rerun()
+
 
 elif st.session_state.run_status == "completed":
     st.balloons()

@@ -382,8 +382,8 @@ def plan_node(state: dict) -> dict:
             "section_queue": section_queue,
             "last_completed_node": "plan",
         }
-    except RuntimeError as exc:
-        error_msg = f"Planning failed after retries: {exc}"
+    except Exception as exc:
+        error_msg = f"Planning failed: {type(exc).__name__}: {exc}"
         logger.error(error_msg)
         errors.append(error_msg)
         return {

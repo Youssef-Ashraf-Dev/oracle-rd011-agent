@@ -73,5 +73,5 @@ prices.txt
 wider_prices.txt
 environment_delivery.yml
 
-# Dev-only: old CLI entrypoint (replaced by app.py + Start_RD011.bat)
+# Dev-only: old CLI entrypoint (Streamlit UI via app.py is now the primary interface)
 main.py
