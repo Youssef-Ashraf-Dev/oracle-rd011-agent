@@ -224,6 +224,7 @@ with st.sidebar:
             # Reset feedback state for a clean approval UI on the next run
             st.session_state.feedback_key_counter = 0
             st.session_state._feedback_has_content = False
+            mailbox.set_progress(0.0, "")
             st.rerun()
     
 
@@ -323,6 +324,8 @@ if st.session_state.run_status == "idle":
                                 "last_completed_node": "",
                             }
                             st.session_state.current_input = initial_state
+                            # Reset mailbox progress for the new session
+                            mailbox.set_progress(0.0, "")
                             st.rerun()
 
     else:
@@ -400,21 +403,27 @@ elif st.session_state.run_status == "running":
                                 label = "Generating sections…"
                             mailbox.set_progress(progress, label)
 
-                if total_sections > 0:
-                    mailbox.set_progress(1.0, "All sections generated")
-
-                # Final snapshot and result
+                # Final snapshot
                 snapshot = graph.get_state(config_dict)
                 if any(t.interrupts for t in snapshot.tasks):
                     status = "waiting_approval"
                 else:
                     status = "completed"
+
+                # ✅ Only show 100% if actually completed
+                if status == "completed":
+                    mailbox.set_progress(1.0, "All sections generated")
+                else:
+                    mailbox.set_progress(0.0, "")   # clear for approval stage
+
                 mailbox.set_result(status=status, result=snapshot.values)
+
 
             except Exception as e:
                 logger.error("Graph execution failed: %s", str(e), exc_info=True)
                 mailbox.set_result(status="error", result=None, error=str(e))
 
+        mailbox.set_progress(0.0, "")
         threading.Thread(
             target=_run_graph_in_background,
             args=(thread_id, input_data),
@@ -500,6 +509,7 @@ elif st.session_state.run_status == "waiting_approval":
         else:
             from langgraph.types import Command
             st.session_state.current_input = Command(resume="APPROVE")
+            st.session_state.current_result = None    # ← discard the plan
             st.session_state.run_status = "running"
             st.session_state.feedback_key_counter += 1
             st.rerun()
