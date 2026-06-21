@@ -27,31 +27,22 @@ def error_handler_node(state: dict) -> dict:
         logger.info("Error handler invoked but no errors found.")
         return {}
 
-    print()
-    print("\u2550" * 55)
-    print("  RD.011 Agent \u2014 Error Summary")
-    print("\u2550" * 55)
-    print()
+    logger.info("=" * 55)
+    logger.info("RD.011 Agent — Error Summary")
+    logger.info("=" * 55)
 
     if errors:
-        print(f"  Errors ({len(errors)} total):")
+        logger.info("Errors (%d total):", len(errors))
         for i, error in enumerate(errors, start=1):
             logger.error("Error %d: %s", i, error)
-            print(f"    {i}. {error}")
-        print()
 
     if failed_sections:
-        print(f"  Failed Sections ({len(failed_sections)} total):")
+        logger.info("Failed Sections (%d total):", len(failed_sections))
         for section in failed_sections:
-            print(f"    \u2022 {section}")
-        print()
+            logger.warning("Failed section: %s", section)
 
-    print(f"  Last completed node: {last_node}")
-    print(f"  Thread ID: {state.get('thread_id', 'N/A')}")
-    print()
-    print("  To resume from the last checkpoint, run:")
-    print(f"    python main.py --resume --thread-id {state.get('thread_id', '<thread_id>')}")
-    print()
-    print("\u2500" * 55)
+    logger.info("Last completed node: %s", last_node)
+    logger.info("Thread ID: %s", state.get("thread_id", "N/A"))
+    logger.info("To resume from the last checkpoint, run: python main.py --resume --thread-id %s", state.get("thread_id", "<thread_id>"))
 
     return {}

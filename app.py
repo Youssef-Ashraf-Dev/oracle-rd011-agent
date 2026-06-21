@@ -53,7 +53,8 @@ load_dotenv(ENV_PATH)
 import config
 
 # Lazy load graph to avoid loading models until needed
-@st.cache_resource(show_spinner=False)
+# NOTE: Do NOT cache the graph with @st.cache_resource because it contains
+# a live SQLite connection (SqliteSaver). Caching would cause connection issues.
 def get_graph():
     from graph import build_graph
     return build_graph()
@@ -190,9 +191,10 @@ with st.sidebar:
     if not api_keys_configured:
         st.warning("⚠️ **API Keys Not Configured**")
         st.markdown("""
-**For Hugging Face Spaces:**
-1. Go to Space Settings → Secrets
-2. Add these secrets:
+**For Streamlit Cloud Deployment:**
+1. In your Streamlit Cloud dashboard, go to your app's settings.
+2. Click on the "Secrets" tab.
+3. Add the following secrets:
    - `OPENROUTER_API_KEY`
    - `GROQ_API_KEY`
    - `GOOGLE_API_KEY` (optional)
@@ -361,15 +363,21 @@ elif st.session_state.run_status == "running":
         st.session_state.job_status = None
         st.session_state.job_error = None
 
-        def _run_graph_in_background():
+        # CRITICAL FIX: Extract data from session state BEFORE spawning thread
+        # Do NOT access st.session_state from within the worker thread
+        thread_id = st.session_state.thread_id
+        input_data = st.session_state.get("current_input")
+
+        def _run_graph_in_background(thread_id, input_data):
+            """Run the graph in a background thread without accessing st.session_state"""
             try:
                 graph = get_graph()
-                config_dict = {"configurable": {"thread_id": st.session_state.thread_id}}
-                input_data = st.session_state.get("current_input")
+                config_dict = {"configurable": {"thread_id": thread_id}}
 
-                # Stream the graph execution silently in the background
-                for _ in graph.stream(input_data, config=config_dict, stream_mode="updates"):
-                    pass  # Progress is handled by the polling loop below
+                # IMPORTANT: Log all graph events for visibility into execution
+                logger.info("Starting graph execution for thread_id=%s", thread_id)
+                for event in graph.stream(input_data, config=config_dict, stream_mode="updates"):
+                    logger.info("GRAPH EVENT: %s", str(event)[:1000])
                 
                 # Get the final state
                 snapshot = graph.get_state(config_dict)
@@ -382,13 +390,14 @@ elif st.session_state.run_status == "running":
                     st.session_state.job_status = "completed"
                     
             except Exception as e:
+                logger.error("Graph execution failed: %s", str(e), exc_info=True)
                 st.session_state.job_error = str(e)
                 st.session_state.job_status = "error"
             finally:
                 st.session_state.job_done = True
 
-        # Start the background thread (only once per session)
-        threading.Thread(target=_run_graph_in_background, daemon=True).start()
+        # Start the background thread with data passed as arguments (only once per session)
+        threading.Thread(target=_run_graph_in_background, args=(thread_id, input_data), daemon=True).start()
 
     # Polling loop: check if the background job is done
     if not st.session_state.job_done:
