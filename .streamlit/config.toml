@@ -14,3 +14,4 @@ level = "info"
 [server]
 maxUploadSize = 200
 enableXsrfProtection = false
+fileWatcherType = "none"
