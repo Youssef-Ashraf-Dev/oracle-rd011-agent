@@ -4,9 +4,12 @@ class JobMailbox:
     def __init__(self):
         self._lock = threading.Lock()
         self.done = False
-        self.status = None          # "completed" | "waiting_approval" | "error"
-        self.result = None          # final state values
+        self.status = None
+        self.result = None
         self.error_message = None
+        # --- Progress tracking ---
+        self.progress = 0.0        # float 0.0 .. 1.0
+        self.progress_label = ""   # e.g., "Generating section 3/32"
 
     def set_result(self, status, result, error=None):
         with self._lock:
@@ -14,9 +17,18 @@ class JobMailbox:
             self.result = result
             self.error_message = error
             self.done = True
+            # Mark progress as complete so the frontend shows 100%
+            self.progress = 1.0
+            self.progress_label = "Completed"
+
+    def set_progress(self, progress: float, label: str):
+        """Call from background thread to update the progress bar."""
+        with self._lock:
+            self.progress = max(0.0, min(1.0, progress))
+            self.progress_label = label
 
     def get_and_clear(self):
-        """Return a dict with job data if done, else None. Consume the result once."""
+        """Return final result if done, else return None."""
         with self._lock:
             if not self.done:
                 return None
@@ -25,8 +37,10 @@ class JobMailbox:
                 "result": self.result,
                 "error_message": self.error_message,
             }
-            self.done = False   # ready for next job
+            self.done = False
             return data
 
-# One global instance per app process
-mailbox = JobMailbox()
+    def get_progress(self):
+        """Return current (progress, label) without clearing."""
+        with self._lock:
+            return self.progress, self.progress_label

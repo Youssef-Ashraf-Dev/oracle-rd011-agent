@@ -226,29 +226,6 @@ with st.sidebar:
             st.session_state._feedback_has_content = False
             st.rerun()
     
-    
-    st.markdown("---")
-    st.subheader("🔧 System Checks")
-
-    if st.button("Test Graphviz Installation"):
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["dot", "-V"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            version_output = result.stderr.strip() or result.stdout.strip()
-            if result.returncode == 0 and version_output:
-                st.success(f"✅ Graphviz is installed\n\nVersion info:\n```\n{version_output}\n```")
-            else:
-                st.error(f"❌ Graphviz 'dot' command failed.\n\nReturn code: {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}")
-        except FileNotFoundError:
-            st.error("❌ Graphviz 'dot' binary **not found**. Check that `packages.txt` contains `graphviz` and the app was rebooted after adding it.")
-        except Exception as e:
-            st.error(f"❌ Error checking Graphviz: {e}")
-
 
 # 2. Main Content
 if os.path.exists("assets/logo_wide.png"):
@@ -392,8 +369,23 @@ elif st.session_state.run_status == "running":
             try:
                 graph = get_graph()
                 config_dict = {"configurable": {"thread_id": tid}}
+                total_sections = len(inp.get("section_queue", []))
+
                 for event in graph.stream(inp, config=config_dict, stream_mode="updates"):
                     logger.info("GRAPH EVENT: %s", str(event)[:1000])
+                    if "generate_section" in event:
+                        update = event["generate_section"]
+                        idx = update.get("current_section_index", 0)
+                        if total_sections > 0:
+                            progress = min(1.0, idx / total_sections)
+                            label = f"Generating section {idx}/{total_sections}"
+                        else:
+                            progress = 0.0
+                            label = "Generating sections…"
+                        mailbox.set_progress(progress, label)
+
+                if total_sections > 0:
+                    mailbox.set_progress(1.0, "All sections generated")
 
                 snapshot = graph.get_state(config_dict)
                 if any(t.interrupts for t in snapshot.tasks):
@@ -414,11 +406,20 @@ elif st.session_state.run_status == "running":
     # --- Poll the mailbox for the result ----------------------------------------
     job_data = mailbox.get_and_clear()
     if job_data is None:
-        # Job still running – show spinner and auto-refresh
-        with st.status("Executing agentic workflow...", expanded=True) as status:
-            st.info("⏳ Processing in the background. This page auto-refreshes every 5 seconds.")
-            time.sleep(5)
+        # Read current progress from the mailbox
+        progress, label = mailbox.get_progress()
+        
+        # Show progress bar only when generation has started
+        if progress > 0:
+            st.progress(progress, text=label)
+        else:
+            # Before any section is generated, show a spinner with a generic message
+            with st.status("Executing agentic workflow...", expanded=True) as s:
+                st.info("⏳ Document analysis and planning in progress...")
+        
+        time.sleep(5)
         st.rerun()
+
     else:
         # Job finished – safely update session state in the main thread
         if job_data["status"] == "error":
