@@ -369,30 +369,48 @@ elif st.session_state.run_status == "running":
             try:
                 graph = get_graph()
                 config_dict = {"configurable": {"thread_id": tid}}
-                total_sections = len(inp.get("section_queue", []))
+
+                # Get the current state from checkpoint – works for both fresh & resume
+                snapshot = graph.get_state(config_dict)
+                state_values = snapshot.values if snapshot else {}
+                section_queue = state_values.get("section_queue", [])
+                total_sections = len(section_queue)
+
+                # If it's a fresh run, section_queue will be empty at this moment.
+                # We'll update total_sections when we see the 'plan' event.
+                # If resuming, the checkpoint already has the queue, so total_sections is correct.
 
                 for event in graph.stream(inp, config=config_dict, stream_mode="updates"):
                     logger.info("GRAPH EVENT: %s", str(event)[:1000])
-                    if "generate_section" in event:
-                        update = event["generate_section"]
-                        idx = update.get("current_section_index", 0)
-                        if total_sections > 0:
-                            progress = min(1.0, idx / total_sections)
-                            label = f"Generating section {idx}/{total_sections}"
-                        else:
-                            progress = 0.0
-                            label = "Generating sections…"
-                        mailbox.set_progress(progress, label)
+
+                    # Update total_sections if this event provides the section_queue
+                    for node_name, update in event.items():
+                        if "section_queue" in update:
+                            section_queue = update["section_queue"]
+                            total_sections = len(section_queue)
+                            logger.info("Section queue detected: %d sections", total_sections)
+
+                        if node_name == "generate_section":
+                            idx = update.get("current_section_index", 0)
+                            if total_sections > 0:
+                                progress = min(1.0, idx / total_sections)
+                                label = f"Generating section {idx}/{total_sections}"
+                            else:
+                                progress = 0.0
+                                label = "Generating sections…"
+                            mailbox.set_progress(progress, label)
 
                 if total_sections > 0:
                     mailbox.set_progress(1.0, "All sections generated")
 
+                # Final snapshot and result
                 snapshot = graph.get_state(config_dict)
                 if any(t.interrupts for t in snapshot.tasks):
                     status = "waiting_approval"
                 else:
                     status = "completed"
                 mailbox.set_result(status=status, result=snapshot.values)
+
             except Exception as e:
                 logger.error("Graph execution failed: %s", str(e), exc_info=True)
                 mailbox.set_result(status="error", result=None, error=str(e))
