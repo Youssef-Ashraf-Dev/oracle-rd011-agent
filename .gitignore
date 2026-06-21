@@ -15,6 +15,11 @@ build/
 venv/
 env/
 ENV/
+
+# Dependency files
+requirements.txt
+
+# Ignore requirements.txt to prioritize environment.yml for deployment
 requirements.txt
 
 # Checkpoints (SQLite checkpoint database — contains run state)

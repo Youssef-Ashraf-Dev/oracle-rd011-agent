@@ -1,6 +1,6 @@
 import streamlit as st
 import nest_asyncio
-nest_asyncio.apply()  # Allow nested event loops (fixes asyncio/Streamlit threading conflict)
+# nest_asyncio.apply()  # Allow nested event loops (fixes asyncio/Streamlit threading conflict)
 import os
 import uuid
 import logging
