@@ -188,6 +188,12 @@ with st.sidebar:
         os.environ.get("GROQ_API_KEY")
     ])
     
+    # DEBUG: Log what environment variables are available
+    logger.info("DEBUG - Available API keys in environment:")
+    logger.info("  OPENROUTER_API_KEY: %s", "SET" if os.environ.get("OPENROUTER_API_KEY") else "NOT SET")
+    logger.info("  GROQ_API_KEY: %s", "SET" if os.environ.get("GROQ_API_KEY") else "NOT SET")
+    logger.info("  GOOGLE_API_KEY: %s", "SET" if os.environ.get("GOOGLE_API_KEY") else "NOT SET")
+    
     if not api_keys_configured:
         st.warning("⚠️ **API Keys Not Configured**")
         st.markdown("""
