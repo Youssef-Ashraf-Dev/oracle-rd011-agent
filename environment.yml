@@ -6,6 +6,8 @@ dependencies:
   - python=3.11
   - graphviz            # Installs the dot.exe binary required for diagram rendering
   - pip
+  - torchvision    # to suppress the torch version warning in streamlit logs
+
   - pip:
       # ── LangGraph + LangChain ──
       - langgraph>=0.2.0

@@ -187,13 +187,7 @@ with st.sidebar:
         os.environ.get("OPENROUTER_API_KEY"),
         os.environ.get("GROQ_API_KEY")
     ])
-    
-    # DEBUG: Log what environment variables are available
-    logger.info("DEBUG - Available API keys in environment:")
-    logger.info("  OPENROUTER_API_KEY: %s", "SET" if os.environ.get("OPENROUTER_API_KEY") else "NOT SET")
-    logger.info("  GROQ_API_KEY: %s", "SET" if os.environ.get("GROQ_API_KEY") else "NOT SET")
-    logger.info("  GOOGLE_API_KEY: %s", "SET" if os.environ.get("GOOGLE_API_KEY") else "NOT SET")
-    
+        
     if not api_keys_configured:
         st.warning("⚠️ **API Keys Not Configured**")
         st.markdown("""
@@ -358,74 +352,62 @@ if st.session_state.run_status == "idle":
 
 elif st.session_state.run_status == "running":
     st.info(f"Pipeline is running... (Thread ID: {st.session_state.thread_id})")
-    
-    import threading
-    import time
-    
-    # Initialize background job tracker if this is the first poll
-    if "job_done" not in st.session_state:
-        st.session_state.job_done = False
-        st.session_state.job_result = None
-        st.session_state.job_status = None
-        st.session_state.job_error = None
 
-        # CRITICAL FIX: Extract data from session state BEFORE spawning thread
-        # Do NOT access st.session_state from within the worker thread
+    from job_mailbox import mailbox
+    import threading, time
+
+    # --- Start the background thread (only once) --------------------------------
+    if "worker_started" not in st.session_state:
+        st.session_state.worker_started = True
+        # Initialize the flags that the polling loop will read
+        st.session_state.job_done = False
+
         thread_id = st.session_state.thread_id
         input_data = st.session_state.get("current_input")
 
-        def _run_graph_in_background(thread_id, input_data):
-            """Run the graph in a background thread without accessing st.session_state"""
+        def _run_graph_in_background(tid, inp):
             try:
                 graph = get_graph()
-                config_dict = {"configurable": {"thread_id": thread_id}}
-
-                # IMPORTANT: Log all graph events for visibility into execution
-                logger.info("Starting graph execution for thread_id=%s", thread_id)
-                for event in graph.stream(input_data, config=config_dict, stream_mode="updates"):
+                config_dict = {"configurable": {"thread_id": tid}}
+                for event in graph.stream(inp, config=config_dict, stream_mode="updates"):
                     logger.info("GRAPH EVENT: %s", str(event)[:1000])
-                
-                # Get the final state
+
                 snapshot = graph.get_state(config_dict)
-                st.session_state.job_result = snapshot.values
-                
-                # Determine post-run status
                 if any(t.interrupts for t in snapshot.tasks):
-                    st.session_state.job_status = "waiting_approval"
+                    status = "waiting_approval"
                 else:
-                    st.session_state.job_status = "completed"
-                    
+                    status = "completed"
+                mailbox.set_result(status=status, result=snapshot.values)
             except Exception as e:
                 logger.error("Graph execution failed: %s", str(e), exc_info=True)
-                st.session_state.job_error = str(e)
-                st.session_state.job_status = "error"
-            finally:
-                st.session_state.job_done = True
+                mailbox.set_result(status="error", result=None, error=str(e))
 
-        # Start the background thread with data passed as arguments (only once per session)
-        threading.Thread(target=_run_graph_in_background, args=(thread_id, input_data), daemon=True).start()
+        threading.Thread(
+            target=_run_graph_in_background,
+            args=(thread_id, input_data),
+            daemon=True
+        ).start()
 
-    # Polling loop: check if the background job is done
-    if not st.session_state.job_done:
+    # --- Poll the mailbox for the result ----------------------------------------
+    job_data = mailbox.get_and_clear()
+    if job_data is None:
+        # Job still running – show spinner and auto-refresh
         with st.status("Executing agentic workflow...", expanded=True) as status:
             st.info("⏳ Processing in the background. This page auto-refreshes every 5 seconds.")
             time.sleep(5)
         st.rerun()
     else:
-        # Job is complete — propagate the result back to the main session state
-        if st.session_state.job_status == "error":
+        # Job finished – safely update session state in the main thread
+        if job_data["status"] == "error":
             st.session_state.run_status = "error"
-            st.session_state.error_message = st.session_state.job_error
+            st.session_state.error_message = job_data["error_message"]
         else:
-            st.session_state.current_result = st.session_state.job_result
-            st.session_state.run_status = st.session_state.job_status
-        
-        # Clean up background job flags to avoid stale state on the next run
+            st.session_state.current_result = job_data["result"]
+            st.session_state.run_status = job_data["status"]
+
+        # Clean up temporary flags so a future run can start fresh
+        del st.session_state.worker_started
         del st.session_state.job_done
-        del st.session_state.job_result
-        del st.session_state.job_status
-        if "job_error" in st.session_state:
-            del st.session_state.job_error
         st.rerun()
 
 elif st.session_state.run_status == "waiting_approval":
