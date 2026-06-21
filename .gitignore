@@ -15,6 +15,7 @@ build/
 venv/
 env/
 ENV/
+requirements.txt
 
 # Checkpoints (SQLite checkpoint database — contains run state)
 checkpoints/
