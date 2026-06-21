@@ -351,44 +351,66 @@ if st.session_state.run_status == "idle":
 elif st.session_state.run_status == "running":
     st.info(f"Pipeline is running... (Thread ID: {st.session_state.thread_id})")
     
-    config_dict = {"configurable": {"thread_id": st.session_state.thread_id}}
-    input_data = st.session_state.get("current_input")
-    graph = get_graph()
+    import threading
+    import time
     
-    try:
-        with st.status("Executing agentic workflow...", expanded=True) as status:
-            progress_placeholder = st.empty()
-            
-            for event in graph.stream(input_data, config=config_dict, stream_mode="updates"):
-                for node_name, state_update in event.items():
-                    if node_name == "generate_section":
-                        snapshot = graph.get_state(config_dict)
-                        curr_idx = snapshot.values.get("current_section_index", 0)
-                        queue_len = len(snapshot.values.get("section_queue", []))
-                        # Show the next section being worked on (or completed)
-                        display_idx = min(curr_idx + 1, queue_len) if queue_len > 0 else 1
-                        progress_placeholder.info(f"⏳ Generating section {display_idx} of {queue_len}...")
-                    else:
-                        st.write(f"✅ Completed step: **{node_name}**")
-            
-            progress_placeholder.empty()
-            
-            status.update(label="Workflow paused/completed!", state="complete", expanded=False)
-            
-            snapshot = graph.get_state(config_dict)
-            st.session_state.current_result = snapshot.values
-            
-            if any(t.interrupts for t in snapshot.tasks):
-                st.session_state.run_status = "waiting_approval"
-            else:
-                st.session_state.run_status = "completed"
-            st.rerun()
+    # Initialize background job tracker if this is the first poll
+    if "job_done" not in st.session_state:
+        st.session_state.job_done = False
+        st.session_state.job_result = None
+        st.session_state.job_status = None
+        st.session_state.job_error = None
 
-    except Exception as e:
-        logger.error(f"Graph execution error: {e}")
-        logger.error(traceback.format_exc())
-        st.session_state.run_status = "error"
-        st.session_state.error_message = str(e)
+        def _run_graph_in_background():
+            try:
+                graph = get_graph()
+                config_dict = {"configurable": {"thread_id": st.session_state.thread_id}}
+                input_data = st.session_state.get("current_input")
+
+                # Stream the graph execution silently in the background
+                for _ in graph.stream(input_data, config=config_dict, stream_mode="updates"):
+                    pass  # Progress is handled by the polling loop below
+                
+                # Get the final state
+                snapshot = graph.get_state(config_dict)
+                st.session_state.job_result = snapshot.values
+                
+                # Determine post-run status
+                if any(t.interrupts for t in snapshot.tasks):
+                    st.session_state.job_status = "waiting_approval"
+                else:
+                    st.session_state.job_status = "completed"
+                    
+            except Exception as e:
+                st.session_state.job_error = str(e)
+                st.session_state.job_status = "error"
+            finally:
+                st.session_state.job_done = True
+
+        # Start the background thread (only once per session)
+        threading.Thread(target=_run_graph_in_background, daemon=True).start()
+
+    # Polling loop: check if the background job is done
+    if not st.session_state.job_done:
+        with st.status("Executing agentic workflow...", expanded=True) as status:
+            st.info("⏳ Processing in the background. This page auto-refreshes every 5 seconds.")
+            time.sleep(5)
+        st.rerun()
+    else:
+        # Job is complete — propagate the result back to the main session state
+        if st.session_state.job_status == "error":
+            st.session_state.run_status = "error"
+            st.session_state.error_message = st.session_state.job_error
+        else:
+            st.session_state.current_result = st.session_state.job_result
+            st.session_state.run_status = st.session_state.job_status
+        
+        # Clean up background job flags to avoid stale state on the next run
+        del st.session_state.job_done
+        del st.session_state.job_result
+        del st.session_state.job_status
+        if "job_error" in st.session_state:
+            del st.session_state.job_error
         st.rerun()
 
 elif st.session_state.run_status == "waiting_approval":
@@ -490,3 +512,4 @@ elif st.session_state.run_status == "error":
     if st.button("Retry / Reset"):
         st.session_state.run_status = "idle"
         st.rerun()
+        
