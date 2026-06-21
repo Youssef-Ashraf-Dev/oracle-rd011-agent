@@ -225,6 +225,29 @@ with st.sidebar:
             st.session_state.feedback_key_counter = 0
             st.session_state._feedback_has_content = False
             st.rerun()
+    
+    
+    st.markdown("---")
+    st.subheader("🔧 System Checks")
+
+    if st.button("Test Graphviz Installation"):
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["dot", "-V"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            version_output = result.stderr.strip() or result.stdout.strip()
+            if result.returncode == 0 and version_output:
+                st.success(f"✅ Graphviz is installed\n\nVersion info:\n```\n{version_output}\n```")
+            else:
+                st.error(f"❌ Graphviz 'dot' command failed.\n\nReturn code: {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}")
+        except FileNotFoundError:
+            st.error("❌ Graphviz 'dot' binary **not found**. Check that `packages.txt` contains `graphviz` and the app was rebooted after adding it.")
+        except Exception as e:
+            st.error(f"❌ Error checking Graphviz: {e}")
 
 
 # 2. Main Content
