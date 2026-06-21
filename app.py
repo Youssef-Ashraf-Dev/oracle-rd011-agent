@@ -6,6 +6,7 @@ import uuid
 import logging
 from pathlib import Path
 from dotenv import load_dotenv, set_key
+from job_mailbox import mailbox
 import traceback
 
 # Streamlit Page Config
@@ -356,7 +357,6 @@ if st.session_state.run_status == "idle":
 elif st.session_state.run_status == "running":
     st.info(f"Pipeline is running... (Thread ID: {st.session_state.thread_id})")
 
-    from job_mailbox import mailbox
     import threading, time
 
     # --- Start the background thread (only once) --------------------------------
