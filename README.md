@@ -14,14 +14,30 @@ conda activate rd011-env
 ```
 
 ## How to Run (Streamlit UI)
-The project now features a user-friendly Streamlit interface. 
+The project features a user-friendly Streamlit interface.
 
+### Local Development
 1. Double-click the `Start_RD011.bat` file in the root directory.
 2. A web browser will automatically open to `http://localhost:8501`.
-3. Enter your API keys directly into the **Settings Sidebar** (No need to configure a `.env` file manually!).
+3. The app will load API keys from your `.env` file.
 4. Upload your documents and click **Generate**.
 
 *Note: You can safely close your browser or refresh the page. Your progress is saved, and you can resume any session by pasting your Thread ID into the "Resume Session" tab.*
+
+### Deploy to Hugging Face Spaces (Free)
+1. **Fork or create a repo** on GitHub with this code
+2. **Create a Hugging Face Space**:
+   - Go to [huggingface.co/spaces](https://huggingface.co/spaces)
+   - Click "Create new Space"
+   - Select "Streamlit" as the Space SDK
+   - Connect your GitHub repo
+3. **Add Secrets** (Settings → Repository Secrets):
+   - `OPENROUTER_API_KEY` — [Get from openrouter.ai](https://openrouter.ai)
+   - `GROQ_API_KEY` — [Get from groq.com](https://console.groq.com)
+   - `GOOGLE_API_KEY` — (Optional) [Get from Google Cloud](https://console.cloud.google.com)
+4. **Done!** The Space will auto-deploy. Share the URL with non-tech users.
+
+**Cost:** Completely free (HF Spaces sponsorship)
 
 ## LLM Configuration & API Keys
 The system uses `config.py` (`CAPABILITY_MAP`) to route tasks intelligently to optimize costs and performance:
@@ -29,9 +45,17 @@ The system uses `config.py` (`CAPABILITY_MAP`) to route tasks intelligently to o
 - **Reasoning/Planning**: OpenRouter (`meta-llama/llama-3.3-70b-instruct`)
 - **Fast Generation**: Groq (`llama-3.3-70b-versatile` - Free Tier)
 
-Required API Keys (Entered via UI):
-- `OPENROUTER_API_KEY`
-- `GROQ_API_KEY`
+**Required API Keys:**
+- `OPENROUTER_API_KEY` — [Get free from openrouter.ai](https://openrouter.ai)
+- `GROQ_API_KEY` — [Get free from groq.com](https://console.groq.com)
+
+**Optional:**
+- `GOOGLE_API_KEY` — For Google embeddings (RAG feature)
+
+**Configuration:**
+- **Local**: Create `.env` file with keys (see `.env.example`)
+- **HF Spaces**: Add as Repository Secrets in Settings
+- The app will show a warning if keys are missing
 
 ## Optional RAG knowledge base
 RAG is gated by `RAG_ENABLED` in `config.py` and uses Chroma locally.

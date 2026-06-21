@@ -4,3 +4,13 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F0F4F8"
 textColor = "#333333"
 font = "sans serif"
+
+[client]
+showErrorDetails = true
+
+[logger]
+level = "info"
+
+[server]
+maxUploadSize = 200
+enableXsrfProtection = false

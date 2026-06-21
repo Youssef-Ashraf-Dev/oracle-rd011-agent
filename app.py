@@ -181,18 +181,28 @@ with st.sidebar:
         st.image("assets/logo_square.jpg", width="stretch")
     st.title("⚙️ Configuration")
     
-    st.subheader("API Keys")
-    openrouter_key = st.text_input("OpenRouter API Key", value=os.environ.get("OPENROUTER_API_KEY", ""), type="password")
-    if openrouter_key and openrouter_key != os.environ.get("OPENROUTER_API_KEY", ""):
-        update_env_key("OPENROUTER_API_KEY", openrouter_key)
-        
-    groq_key = st.text_input("Groq API Key", value=os.environ.get("GROQ_API_KEY", ""), type="password")
-    if groq_key and groq_key != os.environ.get("GROQ_API_KEY", ""):
-        update_env_key("GROQ_API_KEY", groq_key)
-        
-    google_key = st.text_input("Google API Key", value=os.environ.get("GOOGLE_API_KEY", ""), type="password")
-    if google_key and google_key != os.environ.get("GOOGLE_API_KEY", ""):
-        update_env_key("GOOGLE_API_KEY", google_key)
+    # Check if API keys are configured
+    api_keys_configured = all([
+        os.environ.get("OPENROUTER_API_KEY"),
+        os.environ.get("GROQ_API_KEY")
+    ])
+    
+    if not api_keys_configured:
+        st.warning("⚠️ **API Keys Not Configured**")
+        st.markdown("""
+**For Hugging Face Spaces:**
+1. Go to Space Settings → Secrets
+2. Add these secrets:
+   - `OPENROUTER_API_KEY`
+   - `GROQ_API_KEY`
+   - `GOOGLE_API_KEY` (optional)
+
+**For Local Development:**
+1. Create `.env` file with your keys
+2. Restart the app
+        """)
+    else:
+        st.success("✅ API Keys configured")
     
     st.markdown("---")
     is_running = st.session_state.run_status == "running"
